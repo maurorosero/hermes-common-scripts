@@ -5,16 +5,22 @@ plugin** y que mas de un consumidor usa.
 
 ## Que va aqui
 
-Un script entra a este repo solo si cumple las tres condiciones:
+Un script entra a este repo con dos condiciones:
 
 1. **Es permanente.** No muere cuando termina una tarea. Si vive mientras corre un proceso
    concreto, su casa es el skill de ese proceso, no este repo.
-2. **Es transversal.** Lo usa mas de un consumidor, o ninguno en particular. Si tiene un solo
-   dueno claro, va con su dueno.
-3. **No lleva nada interno.** Nada de credenciales, project ids, hosts, IPs ni rutas de una
+2. **No lleva nada interno.** Nada de credenciales, project ids, hosts, IPs ni rutas de una
    instalacion concreta. Todo eso se lee de configuracion o de variables de entorno.
 
-La tercera condicion no depende de la visibilidad del repo. Lo que se versiona es el
+La primera es la que decide. **Ser transversal no es una condicion:** que lo usen varios
+consumidores es bienvenido, pero no se exige — un script suelto y persistente vive aca
+aunque tenga un solo consumidor, y de hecho lo normal es que responda a una necesidad
+particular de quien lo mantiene.
+
+Lo que si excluye es **tener dueño**: un script de un skill viaja dentro del skill, y uno de
+un plugin, dentro del plugin. Este repo es la casa de los sueltos.
+
+La segunda condicion no depende de la visibilidad del repo. Lo que se versiona es el
 mecanismo; los datos de una instalacion —credenciales, hosts, project ids, rutas, y la
 configuracion de un consumidor— pertenecen a su dueño y tienen que sobrevivirle al
 codigo. Por eso no viajan nunca: se leen de configuracion o de variables de entorno.
