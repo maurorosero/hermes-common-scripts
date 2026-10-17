@@ -14,8 +14,10 @@ Un script entra a este repo solo si cumple las tres condiciones:
 3. **No lleva nada interno.** Nada de credenciales, project ids, hosts, IPs ni rutas de una
    instalacion concreta. Todo eso se lee de configuracion o de variables de entorno.
 
-La tercera condicion es la razon de ser de un repo **publico**: lo que se publica es el
-mecanismo, nunca la configuracion.
+La tercera condicion no depende de la visibilidad del repo. Lo que se versiona es el
+mecanismo; los datos de una instalacion —credenciales, hosts, project ids, rutas, y la
+configuracion de un consumidor— pertenecen a su dueño y tienen que sobrevivirle al
+codigo. Por eso no viajan nunca: se leen de configuracion o de variables de entorno.
 
 ## Que NO va aqui
 

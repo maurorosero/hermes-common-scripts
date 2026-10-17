@@ -11,9 +11,9 @@ Contrato (no configurable, es el diseno):
   1. SI NO HAY NADA QUE AVISAR NO IMPRIME NADA Y SALE 0. Corre a diario: un mensaje
      vacio todos los dias es el ruido que este diseno existe para eliminar.
   2. SOLO LEE. No escribe en el servidor ni en disco. No marca nada.
-  3. NO LLEVA NADA INTERNO. Este archivo se versiona en un repo PUBLICO: la libreta
-     y el criterio salen de `<este-nombre>.local.json` (ignorado por git) o del
-     entorno. Nunca de aca.
+  3. NO LLEVA NADA INTERNO. La libreta y el criterio son datos de esta instalacion y
+     viven en `<este-nombre>.local.json` (que git ignora) o en el entorno: la
+     configuracion pertenece a su dueño y le sobrevive al codigo. Nunca van aca.
   4. LA RUTA DEL TRANSPORTE SE COMPONE, NO SE ESCRIBE: `skills.external_dirs` del
      config.yaml del home y, si no esta ahi, el directorio de skills del home activo.
      Si no aparece en ninguno, falla diciendo DONDE busco.
@@ -60,8 +60,8 @@ def cargar_config() -> dict:
     if not CONFIG_LOCAL.is_file():
         raise ErrorConfig(
             f"falta {CONFIG_LOCAL.name} junto al script. Es donde viven los datos de "
-            "esta instalacion (la libreta y el criterio), porque el script se versiona "
-            'en un repo publico. Minimo: {"libreta": "<uri>"}'
+            "esta instalacion (la libreta y el criterio): se quedan fuera del repo "
+            'para sobrevivirle al codigo. Minimo: {"libreta": "<uri>"}'
         )
     try:
         datos = json.loads(CONFIG_LOCAL.read_text(encoding="utf-8"))
