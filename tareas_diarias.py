@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
-"""tareas_diarias — el recordatorio de todos los dias para las tareas marcadas.
+"""tareas_diarias — puente del aviso diario de tareas. SIN logica propia.
 
-Para que sirve: Mauro tiene pendientes que no vencen nunca pero que hay que
-empujar todos los dias (una solicitud que se completa hasta que la acepten, un
-tramite que no avanza solo). Esas tareas llevan la categoria `diario` y este
-puente las enumera una vez al dia.
+La logica vive en su dueno: el skill `nextcloud-tasks`, comando `diarias`. Este
+archivo existe por una sola razon: el cron del core
+(`cron/scheduler_script.py::_resolve_script_path`) exige que el script resuelva
+DENTRO de `<HERMES_HOME>/scripts/`, y el skill vive en otro lado. Asi que aca no
+se formatea ni se decide nada: se compone la ruta del comando, se lo ejecuta y se
+pasa su stdout TAL CUAL.
 
-Contrato (no configurable, es el diseno):
-  1. SI NO HAY NADA ABIERTO CON LA CATEGORIA, NO IMPRIME NADA Y SALE 0. Corre a
-     diario: un mensaje que dice "no hay nada" todos los dias es el ruido que
-     este diseno existe para eliminar.
-  2. SOLO LEE. No escribe en el servidor ni marca nada: la tarea deja de
-     aparecer cuando se completa, no cuando se avisa.
-  3. NO LLEVA NADA INTERNO. La lista y la categoria son datos de esta
-     instalacion y viven en `tareas_diarias.local.json` (que git ignora).
-  4. LA RUTA DEL COMANDO SE COMPONE, NO SE ESCRIBE: `skills.external_dirs` del
+Contrato:
+  1. Si el comando no imprime nada, aca tampoco se imprime nada (job `no_agent`:
+     stdout vacio = no se manda mensaje).
+  2. Solo lee. No escribe en el servidor ni marca nada.
+  3. Lista, categoria y titulo viven en `tareas_diarias.local.json`, al lado de
+     este archivo y fuera de git: la configuracion pertenece a su dueno.
+  4. La ruta del comando se compone, no se escribe: `skills.external_dirs` del
      config.yaml del home y, si no esta ahi, el directorio de skills del home
      activo. Si no aparece en ninguno, falla diciendo DONDE busco.
 
 Uso:
-    tareas_diarias.py                 el aviso: calla si no hay nada
-    tareas_diarias.py --diagnostico   solo lectura: que vio y que comando corrio
+    python3 tareas_diarias.py                 el aviso (o silencio)
+    python3 tareas_diarias.py --diagnostico   que config uso y que comando corrio
 """
 
 from __future__ import annotations
@@ -32,15 +32,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-NOMBRE = Path(__file__).stem
-CONFIG_LOCAL = Path(__file__).with_name(f"{NOMBRE}.local.json")
+CONFIG_LOCAL = Path(__file__).with_name("tareas_diarias.local.json")
 COMANDO = "productivity/nextcloud-tasks/scripts/tareas.py"
-
-DEFECTOS = {
-    "lista": "Mauro ToDo",
-    "categoria": "diario",
-    "titulo": "Pendientes de todos los días",
-}
+DEFECTOS = {"lista": "Mauro ToDo", "categoria": "diario", "titulo": None}
 
 
 def home_hermes() -> Path:
@@ -97,8 +91,10 @@ def resolver_comando() -> Path:
     """Compone la ruta del comando de tareas; si no lo encuentra, dice donde busco."""
     home = home_hermes()
     buscados: list[Path] = [home / "skills" / COMANDO]
-    for raiz in _external_dirs(home / "config.yaml"):
-        buscados.append(Path(raiz).expanduser() / COMANDO)
+    buscados += [
+        Path(raiz).expanduser() / COMANDO
+        for raiz in _external_dirs(home / "config.yaml")
+    ]
     buscados.append(Path.home() / "developers" / "ai" / "skills" / COMANDO)
     for ruta in buscados:
         if ruta.is_file():
@@ -111,17 +107,32 @@ def resolver_comando() -> Path:
     raise SystemExit(1)
 
 
-def pendientes(cfg: dict, comando: Path) -> list[dict]:
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--diagnostico", action="store_true")
+    args = ap.parse_args(argv)
+
+    cfg = cargar_config()
+    comando = resolver_comando()
     orden = [
         sys.executable,
         str(comando),
-        "pendientes",
+        "diarias",
         "--lista",
         cfg["lista"],
         "--categoria",
         cfg["categoria"],
-        "--json",
     ]
+    if cfg.get("titulo"):
+        orden += ["--titulo", cfg["titulo"]]
+
+    if args.diagnostico:
+        existe = "existe" if CONFIG_LOCAL.is_file() else "defaults"
+        print(f"config: {CONFIG_LOCAL} ({existe})")
+        print(f"comando: {comando}")
+        print(f"orden: {' '.join(orden[1:])}")
+        print("--- salida del comando ---")
+
     salida = subprocess.run(
         orden, check=False, capture_output=True, text=True, timeout=120
     )
@@ -131,49 +142,8 @@ def pendientes(cfg: dict, comando: Path) -> list[dict]:
             f"{salida.stderr.strip()[:300]}",
             file=sys.stderr,
         )
-        return []
-    try:
-        return json.loads(salida.stdout).get("tareas", [])
-    except json.JSONDecodeError as e:
-        print(f"tareas_diarias: salida ilegible ({e})", file=sys.stderr)
-        return []
-
-
-def formatear(tareas: list[dict]) -> str:
-    lineas = [f"📌 {DEFECTOS['titulo']} ({len(tareas)})", ""]
-    for t in tareas:
-        lineas.append(f"• {t['titulo']}")
-    lineas += [
-        "",
-        "Están en Mauro ToDo. Cuando estén, se cierran y dejan de aparecer acá.",
-    ]
-    return "\n".join(lineas)
-
-
-def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(add_help=True)
-    ap.add_argument("--diagnostico", action="store_true")
-    args = ap.parse_args(argv)
-
-    cfg = cargar_config()
-    comando = resolver_comando()
-    tareas = pendientes(cfg, comando)
-
-    if args.diagnostico:
-        print(
-            f"config: {CONFIG_LOCAL} ({'existe' if CONFIG_LOCAL.is_file() else 'defaults'})"
-        )
-        print(f"comando: {comando}")
-        print(f"lista: {cfg['lista']} · categoria: {cfg['categoria']}")
-        print(f"abiertas: {len(tareas)}")
-        for t in tareas:
-            print(f"  • {t['titulo']}  (uid {t['uid']})")
-        return 0
-
-    if not tareas:
-        return 0  # nada que avisar: el job no manda nada
-
-    print(formatear(tareas))
+        return 1
+    sys.stdout.write(salida.stdout)
     return 0
 
 
