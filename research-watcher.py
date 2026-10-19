@@ -62,8 +62,8 @@ def ruta_de(clave: str, obligatoria: bool = True) -> Path | None:
 
 
 IGNORAR = {"PLANTILLA.md", "README.md"}
-BOARD = "investigacion"
-PRIME = "inv-prime"
+BOARD = "research"
+PRIME = "researcher-prime"
 SUBCARPETAS = ("sources", "validacion", "entregables", "assets")
 
 
