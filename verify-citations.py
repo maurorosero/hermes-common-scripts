@@ -30,6 +30,7 @@ Salida: 0 si todas las fuentes recuperables verifican · 2 si alguna cita no coi
 from __future__ import annotations
 
 import argparse
+import html as _html
 import json
 import re
 import sys
@@ -42,11 +43,27 @@ _URL = re.compile(r"https?://[^\s)\]>\"']+")
 _CAMPO = re.compile(r"^\s*[-*]?\s*\*\*(.+?):\*\*\s*(.*)$")
 
 
-def cache_dir() -> Path:
+def raices_de_cache(explicita: Path | None = None) -> list[Path]:
+    """Todas las cachés de extracción que pueden tener la evidencia.
+
+    Cada perfil es una isla: un worker escribe en la caché de SU home
+    (``profiles/<perfil>/cache/web``), no en la del home de Andrea. Mirar sólo la del
+    home hace que toda ficha salga como "sin fuente" aunque la página se haya bajado.
+    """
     import os
 
-    home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
-    return home / "cache" / "web"
+    if explicita:
+        return [explicita]
+    base = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+    raices = [base / "cache" / "web"]
+    perfiles = base / "profiles"
+    if perfiles.is_dir():
+        raices += sorted(
+            d / "cache" / "web"
+            for d in perfiles.iterdir()
+            if (d / "cache" / "web").is_dir()
+        )
+    return raices
 
 
 def norm(texto: str) -> str:
@@ -60,45 +77,153 @@ def norm(texto: str) -> str:
     return texto.casefold().strip()
 
 
-def cargar_indice(raiz: Path | None = None) -> dict:
-    ruta = (raiz or cache_dir()) / CACHE_TTL_NOTE
-    try:
-        indice = json.loads(ruta.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return indice if isinstance(indice, dict) else {}
+def evidencia_local(ruta_ficha: Path) -> list[dict]:
+    """Evidencia que el worker dejó en disco junto a la ficha (`sources/evidence/`, `assets/`).
+
+    El script `render-page.js` escribe, al lado de cada `.txt` y `.html`, un `.meta.json` con
+    la URL final y la fecha. Sin esa ficha de procedencia la evidencia no se puede atribuir a
+    una URL concreta y no se usa: adivinar por dominio haría pasar por verificado un dato de
+    otra página del mismo sitio.
+    """
+    carpeta = ruta_ficha.parent.parent  # <investigación>/sources/<ficha>.md
+    entradas: list[dict] = []
+    for base in (carpeta / "sources" / "evidence", carpeta / "assets"):
+        if not base.is_dir():
+            continue
+        for meta in base.rglob("*.meta.json"):
+            try:
+                datos = json.loads(meta.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            # el texto completo del DOM primero: incluye FAQ plegadas y pestañas, que el
+            # texto visible deja fuera aunque sean fuente legítima del dato
+            copias = [
+                destino
+                for sufijo in (".full.txt", ".html")
+                if (destino := meta.with_suffix("").with_suffix(sufijo)).exists()
+            ]
+            if not copias:
+                continue
+            for clave in ("url", "final_url"):
+                if datos.get(clave):
+                    entradas.extend(
+                        {
+                            "url": datos[clave],
+                            "file": str(copia),
+                            "origen": "evidencia local",
+                            "fetched_at": datos.get("fetched_at", ""),
+                        }
+                        for copia in copias
+                    )
+    return entradas
 
 
-def recuperado(url: str, indice: dict) -> tuple[str, str] | None:
-    """Devuelve (contenido, procedencia) del contenido que el worker bajó para esa URL."""
-    limpia = url.rstrip(".,;")
-    for entrada in indice.values():
-        if not isinstance(entrada, dict) or entrada.get("url", "").rstrip(
-            "/"
-        ) != limpia.rstrip("/"):
+def cargar_entradas(raices: list[Path]) -> list[dict]:
+    """Todas las entradas de todas las cachés: url, archivo, cuándo y de dónde salió."""
+    entradas: list[dict] = []
+    for raiz in raices:
+        try:
+            indice = json.loads((raiz / CACHE_TTL_NOTE).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(indice, dict):
+            continue
+        for valor in indice.values():
+            if isinstance(valor, dict) and valor.get("url") and valor.get("file"):
+                entradas.append({**valor, "origen": raiz.parent.parent.name})
+    return entradas
+
+
+def _sin_scripts(html: str) -> str:
+    """Quita <script>, <style> y comentarios: un importe dentro de un JSON no es la página."""
+    html = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.IGNORECASE)
+    html = re.sub(r"<style[\s\S]*?</style>", " ", html, flags=re.IGNORECASE)
+    return re.sub(r"<!--[\s\S]*?-->", " ", html)
+
+
+def _variantes(cita: str) -> list[str]:
+    """La cita, y sus formas limpias. El worker a veces anota entre paréntesis dentro de la cita
+    (`"Light User at 195 Rs" (India)`): la anotación es suya, no está en la fuente."""
+    fuera = [cita]
+    sin_paren = re.sub(r"\s*\([^)]{1,40}\)\s*$", "", cita).strip()
+    if sin_paren and sin_paren != cita:
+        fuera.append(sin_paren)
+    entre = _SOLO_CITA.findall(cita)
+    fuera.extend(t.strip() for t in entre if t.strip())
+    return list(dict.fromkeys(fuera))
+
+
+_MEMO: dict[str, list[tuple[str, str]]] = {}
+_VIVO: dict[str, tuple[str, str] | None] = {}
+
+
+def recuperado(url: str, entradas: list[dict]) -> list[tuple[str, str]]:
+    """Todas las copias que tenemos de esa URL: (contenido, procedencia).
+
+    Puede haber varias y todas valen: el render de hoy, un extractor que sirvió la página
+    desde otro país, la caché de una corrida anterior. Una cita se comprueba contra todas;
+    quedarse con la primera hacía fallar citas que sí estaban en otra copia del documento.
+    """
+    limpia = url.rstrip(".,;").rstrip("/")
+    if limpia in _MEMO:
+        return _MEMO[limpia]
+    copias: list[tuple[str, str]] = []
+    for entrada in entradas:
+        if entrada["url"].rstrip(".,;").rstrip("/") != limpia:
             continue
         try:
-            contenido = Path(entrada["file"]).read_text(
-                encoding="utf-8", errors="replace"
+            contenido = _html.unescape(
+                Path(entrada["file"]).read_text(encoding="utf-8", errors="replace")
             )
         except (KeyError, OSError):
             continue
-        return contenido, "caché de extracción"
-    return None
+        if entrada["file"].endswith((".html", ".htm")):
+            contenido = _sin_scripts(contenido)
+        copias.append(
+            (contenido, f"caché de extracción ({entrada.get('origen') or 'home'})")
+        )
+    _MEMO[limpia] = copias
+    return copias
 
 
 def refetch(url: str) -> tuple[str, str] | None:
     """Baja la página viva. Comprueba la cita contra el estado de hoy, no contra el que leyó el worker."""
     import urllib.request
 
+    if url in _VIVO:
+        return _VIVO[url]
+    _VIVO[url] = None
     try:
         req = urllib.request.Request(
             url, headers={"User-Agent": "Mozilla/5.0 (research-verifier)"}
         )
         with urllib.request.urlopen(req, timeout=25) as r:
-            return r.read().decode("utf-8", errors="replace"), "página viva (hoy)"
+            _VIVO[url] = (
+                r.read().decode("utf-8", errors="replace"),
+                "página viva (hoy)",
+            )
     except Exception:  # noqa: BLE001 — una fuente caída no invalida la cita
-        return None
+        _VIVO[url] = None
+    return _VIVO[url]
+
+
+def _trozos_de_cita(valor: str) -> list[str]:
+    """Parte una línea de cita en sus trozos.
+
+    La plantilla de ficha separa las citas con ` · ` y las envuelve en comillas. Partir por el
+    separador es más fiable que buscar comillas: una cita puede llevar comillas escapadas
+    dentro (`\\"usuario light\\"`) y el regex cortaba ahí, dejando media cita y un falso
+    "cita_no_coincide" que acusaba al worker de un error que no cometió.
+    """
+    trozos = [t.strip() for t in valor.split(" · ")]
+    limpios = []
+    for t in trozos:
+        t = t.replace('\\"', '"').strip()
+        if len(t) >= 2 and t[0] in "\"«“'" and t[-1] in "\"»”'":
+            t = t[1:-1].strip()
+        if t:
+            limpios.append(t)
+    return limpios or ([valor.strip()] if valor.strip() else [])
 
 
 def parsear(ruta: Path) -> list[dict]:
@@ -119,33 +244,33 @@ def parsear(ruta: Path) -> list[dict]:
         if m:
             campo, valor = m.group(1).strip().casefold(), m.group(2).strip()
             if campo.startswith("cita"):
-                trozos = _SOLO_CITA.findall(valor) or [valor]
-                actual["citas"].extend(t.strip() for t in trozos if t.strip())
+                actual["citas"].extend(_trozos_de_cita(valor))
             elif campo.startswith("fuente"):
                 actual["urls"].extend(u.rstrip(".,;") for u in _URL.findall(valor))
             elif campo.startswith("tipo"):
                 actual["tipo"] = valor or "?"
         elif actual["citas"] and linea.strip() and not linea.strip().startswith("-"):
-            extra = _SOLO_CITA.findall(linea)
-            actual["citas"].extend(t.strip() for t in extra if t.strip())
+            actual["citas"].extend(_trozos_de_cita(linea))
     return hallazgos
 
 
-def verificar(ruta: Path, indice: dict, vivo: bool) -> dict:
+def verificar(ruta: Path, entradas: list[dict], vivo: bool) -> dict:
     hallazgos = parsear(ruta)
     filas = []
     for halo in hallazgos:
-        contenidos = []
+        contenidos: list[tuple[str, str]] = []
         for url in dict.fromkeys(halo["urls"]):
-            obtenido = recuperado(url, indice) or (refetch(url) if vivo else None)
-            if obtenido:
-                contenidos.append(obtenido)
+            copias = recuperado(url, entradas)
+            if not copias and vivo and (viva := refetch(url)):
+                copias = [viva]
+            contenidos.extend(copias)
         citas_ok = citas_mal = 0
         for cita in halo["citas"]:
-            blanco = norm(cita)
-            if len(blanco) < 4:
+            variantes = [norm(v) for v in _variantes(cita)]
+            variantes = [v for v in variantes if len(v) >= 4]
+            if not variantes:
                 continue
-            if any(blanco in norm(texto) for texto, _ in contenidos):
+            if any(v in norm(texto) for v in variantes for texto, _ in contenidos):
                 citas_ok += 1
             elif contenidos:
                 citas_mal += 1
@@ -201,8 +326,10 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    indice = cargar_indice(args.cache_dir)
-    resultados = [verificar(f, indice, args.refetch) for f in args.fichas]
+    del_cache = cargar_entradas(raices_de_cache(args.cache_dir))
+    resultados = [
+        verificar(f, evidencia_local(f) + del_cache, args.refetch) for f in args.fichas
+    ]
 
     if args.json:
         print(json.dumps(resultados, ensure_ascii=False, indent=2))
@@ -218,7 +345,7 @@ def main() -> int:
                 print(
                     f"  {marca} {f['hallazgo'][:64]:64} {f['estado']:16} "
                     f"citas {f['citas_ok']}/{f['citas_ok'] + f['citas_fallidas']} · "
-                    f"fuentes recuperadas {f['fuentes_recuperadas']}/{len(f['fuentes'])}"
+                    f"copias {f['fuentes_recuperadas']} de {len(f['fuentes'])} url(s)"
                 )
                 if f["citas_fallidas"]:
                     print("      ↳ cita no encontrada en la fuente declarada")
