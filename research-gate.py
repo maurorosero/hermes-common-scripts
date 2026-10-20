@@ -8,6 +8,7 @@ Tres decisiones, ninguna automatica:
     present  <uuid> [--formato X]      lo manda al presenter -> estado `waiting`
     show     <uuid>                    el estado del gate, sin tocar nada
     assets   <uuid>                    el manifiesto contra el disco (--check)
+    relaunch <uuid> [--barato]         la vuelve a encolar desde cero y archiva la muerta
     panel                              el tablero entero, por etapa (~/research)
     pending                            solo lo que espera una firma tuya
 
@@ -29,8 +30,10 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
 BOARD = os.environ.get("RESEARCH_BOARD", "research")
@@ -60,6 +63,7 @@ REQUESTED = _raiz("RESEARCH_REQ_PATH", "Research/working/requested")
 PROCESSING = _raiz("RESEARCH_PROC_PATH", "Research/working/processing")
 READY = _raiz("RESEARCH_READY_PATH", "Research/working/ready")
 COLA_DOCUMENTOS = _raiz("RESEARCH_DOCS_PATH", "Research/documentos/requested")
+ARCHIVO = PROCESSING.parent / "_archivo"
 
 
 def _leer(ruta: Path) -> tuple[dict, str]:
@@ -525,10 +529,112 @@ def verbo_assets(uuid: str) -> int:
     return r.returncode
 
 
+# Lo que describe el pedido y sobrevive a un relanzamiento. Lo que describe la corrida
+# (uuid, correcciones, huecos, la nota del prime) no viaja: es historia de la que murio.
+_CAMPOS_QUE_VIAJAN = (
+    "version_esquema",
+    "tema",
+    "solicitante",
+    "origen",
+    "tipo",
+    "complejidad",
+    "modo",
+    "angulos_modo",
+    "angulos",
+    "instrucciones",
+    "tags",
+    "contexto_previo",
+    "salida_expectada",
+    "destino_post_investigacion",
+    "verificacion",
+)
+
+
+def _slug(texto: str) -> str:
+    limpio = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
+    limpio = re.sub(r"[^a-zA-Z0-9]+", "-", limpio).strip("-").lower()
+    return limpio[:60] or "pedido"
+
+
+def verbo_relaunch(uuid: str, barato: bool = False) -> int:
+    """Vuelve a encolar una investigacion que no llego a entregable.
+
+    No es `improve`: `improve` devuelve al redactor sobre lo ya investigado, porque el problema
+    es lo escrito. `relaunch` sirve para cuando el problema es la investigacion misma — fichas
+    sin evidencia guardada, un grafo que se corto, un entregable que no existe. Reencola el
+    pedido desde cero y saca de en medio la carpeta y las cards muertas.
+
+    Se niega si hay algo que perder: un entregable, una decision esperando tu firma.
+    """
+    carpeta = _carpeta(uuid)
+    datos, cuerpo = _leer(carpeta / "request.md")
+
+    if datos.get("estado") in ("ready", "waiting"):
+        print(
+            f"{uuid}: no la relanzo — esta en '{datos.get('estado')}', ya tiene entregable."
+        )
+        print("  para rehacerlo sobre lo investigado: /research improve", uuid)
+        return 1
+    if (carpeta / "validation" / "gate.json").exists():
+        print(f"{uuid}: no la relanzo — hay una decision registrada en el gate.")
+        return 1
+    try:
+        _, plan = _plan(carpeta)
+    except SystemExit:
+        plan = {}
+    if plan.get("gate"):
+        print(
+            f"{uuid}: no la relanzo — la card de gate {plan['gate']} espera tu decision."
+        )
+        return 1
+
+    nuevo = {k: datos[k] for k in _CAMPOS_QUE_VIAJAN if k in datos}
+    nuevo["estado"] = "requested"
+    nuevo["fecha_solicitud"] = dt.date.today().isoformat()
+    if barato and nuevo.get("angulos"):
+        nuevo["angulos"] = [
+            {**a, "investigador": "barato"} if a.get("investigador") == "experto" else a
+            for a in nuevo["angulos"]
+        ]
+
+    REQUESTED.mkdir(parents=True, exist_ok=True)
+    destino = REQUESTED / f"{_slug(str(nuevo.get('tema') or uuid))}.md"
+    if destino.exists():
+        print(f"{uuid}: ya hay un pedido en cola con ese nombre: {destino.name}")
+        print("  resolvelo (la puerta lo va a tomar) o renombralo antes de relanzar.")
+        return 1
+    _escribir(destino, nuevo, cuerpo)
+    print(f"REENCOLADO  {destino}")
+
+    archivadas: list[str] = []
+    for card in [plan.get("raiz"), *(a.get("card") for a in plan.get("angulos") or [])]:
+        if not card:
+            continue
+        rc, txt = _kanban("archive", str(card))
+        archivadas.append(f"{card} {'ok' if rc == 0 else txt.strip()[:80]}")
+    if archivadas:
+        print("CARDS       " + " · ".join(archivadas))
+
+    ARCHIVO.mkdir(parents=True, exist_ok=True)
+    movida = ARCHIVO / carpeta.name
+    if movida.exists():
+        movida = ARCHIVO / f"{carpeta.name}-{dt.datetime.now():%H%M%S}"
+    shutil.move(str(carpeta), str(movida))
+    print(f"ARCHIVADA   {movida}")
+    print(
+        "\n  la puerta lo toma en el proximo tick (5 min). Si queres cambiar algo del"
+    )
+    print(f"  pedido —motor, alcance— editalo ahora: {destino.name}")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         return verbo_panel()
     verbo = argv[1]
+    if verbo in ("help", "-h", "--help"):
+        print(__doc__)
+        return 0
     # `panel` y `pending` no hablan de una investigacion: hablan del tablero, asi que no
     # llevan uuid. Todo lo demas si, y sin el se muestra la ayuda en vez de adivinar.
     if verbo == "panel":
@@ -556,6 +662,8 @@ def main(argv: list[str]) -> int:
         return verbo_show(uuid)
     if verbo == "assets":
         return verbo_assets(uuid)
+    if verbo == "relaunch":
+        return verbo_relaunch(uuid, "--barato" in argv)
     print(__doc__)
     return 2
 
