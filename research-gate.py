@@ -517,15 +517,11 @@ def verbo_pending(_uuid: str | None = None) -> int:
 def verbo_panel(_uuid: str | None = None) -> int:
     """El tablero, escrito para que se entienda que hay que hacer y nada mas.
 
-    Sin ids de cards, sin nombres de etapa y sin jerga del contrato: lo que espera una decision
-    se cuenta como una tarea ("el informe esta listo, aprobalo o pedi cambios"), y lo que avanza
-    solo se resume en una linea para no tapar lo que si requiere a alguien.
+    Todo va numerado y con su tema —una lista donde unas cosas llevan numero y otras no se lee
+    como si las ultimas no existieran—, y lo que avanza solo se dice igual de claro que lo que
+    espera una decision: lo unico que cambia es que no hay nada que hacer.
     """
-    deciden: list[dict] = []
-    trabajan: list[dict] = []
-    atascadas: list[dict] = []
-    listas: list[dict] = []
-    en_cola: list[dict] = []
+    filas: list[tuple[str, dict]] = []
 
     if PROCESSING.exists():
         for carpeta in sorted(p for p in PROCESSING.iterdir() if p.is_dir()):
@@ -536,16 +532,16 @@ def verbo_panel(_uuid: str | None = None) -> int:
             except SystemExit:
                 continue
             if f["estado"] == "waiting":
-                atascadas.append(f)
+                filas.append(("atascada", f))
             elif f["gate"] and not f["tiene_gate"]:
-                deciden.append(f)
+                filas.append(("decide", f))
             else:
-                trabajan.append(f)
+                filas.append(("trabaja", f))
     if READY.exists():
         for carpeta in sorted(p for p in READY.iterdir() if p.is_dir()):
             if (carpeta / "request.md").exists():
                 try:
-                    listas.append(_ficha(carpeta))
+                    filas.append(("aprobada", _ficha(carpeta)))
                 except SystemExit:
                     continue
     if REQUESTED.exists():
@@ -556,75 +552,55 @@ def verbo_panel(_uuid: str | None = None) -> int:
                 datos, _ = _leer(archivo)
             except SystemExit:
                 continue
-            en_cola.append(
-                {
-                    "uuid": datos.get("uuid") or archivo.stem,
-                    "tema": (datos.get("tema") or "(sin tema)").strip(),
-                }
+            filas.append(
+                (
+                    "cola",
+                    {
+                        "uuid": datos.get("uuid") or archivo.stem,
+                        "tema": (datos.get("tema") or "(sin tema)").strip(),
+                    },
+                )
             )
 
-    total = len(deciden) + len(trabajan) + len(atascadas) + len(listas) + len(en_cola)
-    if not total:
+    if not filas:
         print("No hay ninguna investigación en marcha.")
         return 0
     print(
-        f"RESEARCH — {total} "
-        + ("investigación" if total == 1 else "investigaciones")
+        f"RESEARCH — {len(filas)} "
+        + ("investigación" if len(filas) == 1 else "investigaciones")
         + "\n"
     )
 
-    n = 0
-    for f in deciden:
-        n += 1
+    for n, (tipo, f) in enumerate(filas, 1):
         print(f"{n}) {f['tema']}")
-        print("   El informe está terminado y todavía no lo diste por bueno.")
-        print("   Aprobar es sólo eso: darlo por bueno. El documento no se arma solo.")
-        print(f"     leerlo              /research show {f['uuid']}")
-        print(f"     darlo por bueno     /research approve {f['uuid']}")
-        print(f'     pedirle cambios     /research improve {f["uuid"]} --motivo "..."')
-        print(f"     armar el documento  /research present {f['uuid']} --formato docx")
-        print()
-
-    for f in atascadas:
-        n += 1
-        print(f"{n}) {f['tema']}")
-        print(
-            "   Lo diste por bueno, pero el pedido del documento se perdió: así no avanza."
-        )
-        print(f"     rearmar el pedido   /research present {f['uuid']}")
-        print()
-
-    for f in listas:
-        n += 1
-        print(f"{n}) {f['tema']}")
-        print("   Está aprobada. Si querés el documento armado:")
-        print(f"     armar el documento  /research present {f['uuid']} --formato docx")
-        print()
-
-    def _plural(n: int, uno: str, varios: str) -> str:
-        return uno if n == 1 else varios
-
-    if deciden or atascadas or listas:
-        if trabajan:
-            quien = _plural(
-                len(trabajan), "sigue trabajando sola", "siguen trabajando solas"
+        if tipo == "decide":
+            print("   El informe está terminado y todavía no lo diste por bueno.")
+            print(
+                "   Aprobar es sólo eso: darlo por bueno. El documento no se arma solo."
             )
-            print(f"Además, {len(trabajan)} {quien} — no tenés que hacer nada.")
-        if en_cola:
-            quien = _plural(len(en_cola), "espera", "esperan")
-            print(f"Y {len(en_cola)} {quien} que la puerta la tome.")
-    else:
-        if trabajan:
-            quien = _plural(
-                len(trabajan), "investigación trabajando", "investigaciones trabajando"
+            print(f"     leerlo              /research show {f['uuid']}")
+            print(f"     darlo por bueno     /research approve {f['uuid']}")
+            print(
+                f'     pedirle cambios     /research improve {f["uuid"]} --motivo "..."'
             )
-            print(f"{len(trabajan)} {quien} — no tenés que hacer nada.")
-        if en_cola:
-            quien = _plural(
-                len(en_cola), "en la cola, esperando", "en la cola, esperando"
+            print(
+                f"     armar el documento  /research present {f['uuid']} --formato docx"
             )
-            print(f"{len(en_cola)} {quien} que la puerta la tome.")
-        print("\nNada espera tu decisión.")
+        elif tipo == "atascada":
+            print(
+                "   La diste por buena, pero el pedido del documento se perdió: así no avanza."
+            )
+            print(f"     rearmar el pedido   /research present {f['uuid']}")
+        elif tipo == "aprobada":
+            print("   Está aprobada. Si querés el documento armado:")
+            print(
+                f"     armar el documento  /research present {f['uuid']} --formato docx"
+            )
+        elif tipo == "trabaja":
+            print("   Está trabajando sola ahora mismo. No tenés que hacer nada.")
+        else:
+            print("   Esperando que la puerta la tome. No tenés que hacer nada.")
+        print()
     return 0
 
 
