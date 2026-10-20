@@ -64,7 +64,7 @@ def ruta_de(clave: str, obligatoria: bool = True) -> Path | None:
 IGNORAR = {"PLANTILLA.md", "README.md"}
 BOARD = "research"
 PRIME = "researcher-prime"
-SUBCARPETAS = ("sources", "validacion", "entregables", "assets")
+SUBCARPETAS = ("sources", "validation", "deliverables", "assets")
 
 
 def crear_card(tema: str, cuerpo: str, uuid: str) -> tuple[int, str]:
