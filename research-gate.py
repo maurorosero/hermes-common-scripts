@@ -387,6 +387,63 @@ def _ficha(carpeta: Path) -> dict:
     }
 
 
+def _para_revisar(carpeta: Path) -> str:
+    """Lo que Mauro necesita saber para decidir: qué documento firma y qué tan respaldado está."""
+    informes = (
+        sorted((carpeta / "deliverables").glob("*.md"))
+        if (carpeta / "deliverables").exists()
+        else []
+    )
+    if not informes:
+        return "sin informe en deliverables - no hay nada que firmar"
+    partes = [f"informe: {informes[0].name}"]
+    claims = carpeta / "validation" / "claims.json"
+    verdicts = carpeta / "validation" / "verdicts.json"
+    if claims.exists():
+        try:
+            n = len(json.loads(claims.read_text()) or [])
+            partes.append(f"{n} hallazgos")
+        except (OSError, json.JSONDecodeError):
+            pass
+    if verdicts.exists():
+        try:
+            v = json.loads(verdicts.read_text()) or []
+            cuenta: dict[str, int] = {}
+            for d in v if isinstance(v, list) else (v.get("claims") or []):
+                e = str((d or {}).get("veredicto") or "").strip()
+                if e:
+                    cuenta[e] = cuenta.get(e, 0) + 1
+            if cuenta:
+                partes.append(" · ".join(f"{k} {n}" for k, n in sorted(cuenta.items())))
+        except (OSError, json.JSONDecodeError):
+            pass
+    return " · ".join(partes)
+
+
+def _espera_presenter(carpeta: Path, uuid: str) -> str:
+    """Dice la verdad del paso siguiente, incluido cuando el traspaso se perdio.
+
+    El brief que se escribio queda anotado en `gate.json`, asi que se comprueba ESE archivo y no
+    la cola: una investigacion puede estar en `waiting` con el brief ya borrado, y entonces no
+    hay nada esperando a nadie — hay un pedido a medio traspasar.
+    """
+    registrado = ""
+    gate = carpeta / "validation" / "gate.json"
+    if gate.exists():
+        try:
+            registrado = str(json.loads(gate.read_text()).get("brief") or "")
+        except (OSError, json.JSONDecodeError):
+            registrado = ""
+    if registrado and Path(registrado).exists():
+        return "brief en la cola y nadie lo levanta: la etapa de presentacion no esta construida"
+    if registrado:
+        return (
+            "el brief ya no esta: el traspaso se perdio - se rearma con /research present "
+            + uuid
+        )
+    return "sin brief registrado - /research present " + uuid
+
+
 def _linea(f: dict, extra: str = "") -> str:
     tema = f["tema"] if len(f["tema"]) <= 42 else f["tema"][:41] + "…"
     return f"{f['uuid']}  {tema}" + (f"\n              {extra}" if extra else "")
@@ -415,9 +472,10 @@ def verbo_pending(_uuid: str | None = None) -> int:
             aviso = (
                 f" · {len(incompletos)} asset(s) incompletos: approve sale con avisos"
             )
-        print(_linea(f, f"gate {f['gate']}{aviso}"))
-        print(f"              /research approve {f['uuid']}")
-        print(f"              /research show {f['uuid']}")
+        print(_linea(f, _para_revisar(f["carpeta"]) + aviso))
+        print(f"              ver     /research show {f['uuid']}")
+        print(f"              firmar  /research approve {f['uuid']}")
+        print(f'              cambiar /research improve {f["uuid"]} --motivo "..."')
         print()
     return 0
 
@@ -487,14 +545,17 @@ def verbo_panel(_uuid: str | None = None) -> int:
         print(f"{titulo} ({len(filas)})")
         for f in filas:
             if titulo == "Esperando tu decision":
-                print(_linea(f, f"gate {f['gate']} · /research approve {f['uuid']}"))
-            elif titulo == "En presentacion":
+                print(_linea(f, _para_revisar(f["carpeta"])))
+                print(f"              ver     /research show {f['uuid']}")
+                print(f"              firmar  /research approve {f['uuid']}")
                 print(
-                    _linea(
-                        f,
-                        f"{f['salida'] or 'formato sin definir'} · esperando al presenter",
-                    )
+                    f'              cambiar /research improve {f["uuid"]} --motivo "..."'
                 )
+                print(
+                    f"              mandar  /research present {f['uuid']} --formato docx"
+                )
+            elif titulo == "En presentacion":
+                print(_linea(f, _espera_presenter(f["carpeta"], f["uuid"])))
             elif titulo == "Aprobadas":
                 print(_linea(f, f"ready · /research present {f['uuid']}"))
             elif titulo == "En curso":
@@ -510,6 +571,13 @@ def verbo_panel(_uuid: str | None = None) -> int:
             else:
                 print(_linea(f))
         print()
+    esperando = len(bloques["Esperando tu decision"])
+    if esperando == 1:
+        print("Siguiente paso: 1 informe espera tu firma.")
+    elif esperando > 1:
+        print(f"Siguiente paso: {esperando} informes esperan tu firma.")
+    else:
+        print("Siguiente paso: nada espera tu firma.")
     return 0
 
 
