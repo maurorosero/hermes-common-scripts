@@ -321,6 +321,36 @@ def frontmatter_de(ruta: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+_PRESUPUESTOS: dict | None = None
+
+
+def _tabla_de_presupuestos() -> dict:
+    """La tabla de techos, leída del esquema. Cacheada: el esquema no cambia en la corrida."""
+    global _PRESUPUESTOS
+    tabla = _PRESUPUESTOS
+    if tabla is None:
+        cargada = cargar_esquema().get("presupuestos") or {}
+        tabla = cargada if isinstance(cargada, dict) else {}
+        _PRESUPUESTOS = tabla
+    return tabla
+
+
+def linea_de_presupuesto(ang: dict) -> str:
+    """El techo del ángulo en palabras, para que viaje en la card y no haya que buscarlo."""
+    tabla = _tabla_de_presupuestos()
+    nivel = str(ang.get("presupuesto") or "")
+    numeros = (tabla.get("niveles") or {}).get(nivel)
+    if not numeros:
+        return ""
+    tope = tabla.get("tope_duro") or {}
+    return (
+        f"Presupuesto: {nivel} — hasta {numeros.get('llamadas')} llamadas de herramienta "
+        f"y {numeros.get('fuentes')} fuentes. Tope duro "
+        f"{tope.get('llamadas')}/{tope.get('fuentes')}: pasado ese punto entregás lo que "
+        f"tengas en vez de seguir buscando."
+    )
+
+
 def cuerpo_de_angulo(data: dict, i: int, n: int, carpeta: Path) -> tuple[str, str, str]:
     """(título de la card, cuerpo, perfil) del ángulo i, en base 1."""
     ang = data["angulos"][i - 1] if isinstance(data["angulos"][i - 1], dict) else {}
@@ -335,6 +365,9 @@ def cuerpo_de_angulo(data: dict, i: int, n: int, carpeta: Path) -> tuple[str, st
         "",
         f"Alcance: {ang.get('alcance') or '(el que delimita el título)'}",
     ]
+    techo = linea_de_presupuesto(ang)
+    if techo:
+        lineas += ["", techo]
     preguntas = ang.get("preguntas")
     if isinstance(preguntas, list) and preguntas:
         lineas += ["", "Preguntas que hay que responder:"] + [

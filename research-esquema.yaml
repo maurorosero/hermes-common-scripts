@@ -17,6 +17,31 @@ uuid:
   longitud_cuerpo: 8
   patron_cuerpo: "[A-Za-z0-9]{8}"
 
+presupuestos:
+  descripcion: >
+    Techo de trabajo por ángulo. El presupuesto NO es una meta: es el punto donde el
+    investigador deja de buscar y entrega lo que tiene. Cuenta TODAS las llamadas de
+    herramienta —buscar, abrir, leer el request y escribir el archivo—, no sólo las
+    búsquedas: es el número que se puede contar sin discutir. Un ángulo sin presupuesto
+    investiga hasta agotarse, y eso se mide en llamadas, no en calidad.
+  niveles:
+    corto:
+      llamadas: 14
+      fuentes: 6
+    estandar:
+      llamadas: 20
+      fuentes: 10
+    profundo:
+      llamadas: 28
+      fuentes: 15
+  tope_duro:
+    llamadas: 35
+    fuentes: 20
+  por_investigador:
+    barato: corto
+    experto: profundo
+  por_defecto: estandar
+
 campos:
   version_esquema:
     tipo: entero
@@ -147,6 +172,17 @@ campos:
           experto = el perito con motor MoE, para el ángulo donde el dato es caro de errar
           o las fuentes se contradicen. El default es barato: el experto es escaso por
           diseño, y un pedido con todos los ángulos en experto está mal descompuesto.
+
+      presupuesto:
+        tipo: enum
+        dominio: [corto, estandar, profundo]
+        obligatorio: false
+        escrito_por: orquestador
+        descripcion: >
+          Techo de trabajo del ángulo: cuántas llamadas de herramienta y cuántas fuentes
+          antes de entregar. La tabla concreta vive arriba, en `presupuestos.niveles`.
+          Si falta, se deriva del investigador (barato→corto, experto→profundo) y sin
+          nivel queda en estandar. Nadie entrega después del tope duro.
 
   instrucciones:
     tipo: texto

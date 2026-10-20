@@ -297,6 +297,20 @@ def validar(texto: str, esquema: dict | None = None) -> dict:
                         f"angulos[{i}].{sub}: '{valor_sub}' no está en "
                         f"{'/'.join(map(str, spec_sub.get('dominio', [])))}"
                     )
+            # presupuesto: derivarlo del nivel es determinista; elegir nivel cuando la
+            # fuente no lo dijo es criterio del orquestador, no del validador. Por eso el
+            # default sale de la tabla del esquema y no de una opinión.
+            if not ang.get("presupuesto"):
+                pre = esquema.get("presupuestos") or {}
+                nivel = str(ang.get("investigador") or "")
+                mapa = pre.get("por_investigador") or {}
+                ang["presupuesto"] = mapa.get(nivel) or pre.get(
+                    "por_defecto", "estandar"
+                )
+                reporte["correcciones"].append(
+                    f"angulos[{i}].presupuesto: completado con "
+                    f"'{ang['presupuesto']}' (investigador: {nivel or 'sin nivel'})"
+                )
             limpios.append(ang)
         data["angulos"] = limpios
 
