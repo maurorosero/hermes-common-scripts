@@ -19,11 +19,17 @@ Qué hace, en dos barridos:
     8. Deja `dispatch.json` en la carpeta con los ids: es la marca de que el despacho ya se
        hizo, y el mapa del grafo para los barridos siguientes.
 
+  BARRIDO 3 — la verificación de citas (`processing/`):
+    9. Cuando un ángulo ya escribió su ficha en `sources/`, corre `verify-citations.py` sobre
+       ella y deja el veredicto en `validation/citations.json`. Es determinista y no gasta
+       tokens: comprueba que la fuente se recuperó de verdad y que la cita literal está dentro.
+   10. Es idempotente por mtime: si el JSON es más nuevo que las fichas, no se repite.
+
 Regla dura: si la card falla, el request SE QUEDA en la cola. Nunca se pierde un pedido
 por un fallo del board.
 
 Uso:
-    python3 research-watcher.py              # los dos barridos
+    python3 research-watcher.py              # los tres barridos
     python3 research-watcher.py --dry-run    # informa sin mover ni crear nada
 """
 
@@ -495,6 +501,69 @@ def despachar(en_curso: Path, dry: bool) -> list[str]:
     return lineas
 
 
+def verificar_citas(en_curso: Path, dry: bool) -> list[str]:
+    """Barrido 3 — verifica mecánicamente las citas de cada ficha entregada.
+
+    Determinista y sin tokens: `verify-citations.py` comprueba contra la caché de extracción
+    que la fuente se recuperó y que la cita literal aparece dentro. El veredicto se guarda en
+    `validation/citations.json` para que el verificador y el redactor lo consuman sin releer.
+
+    Idempotente por mtime: si el JSON es más nuevo que todas las fichas, no se vuelve a correr.
+    El cron pasa cada 5 minutos, así que repetirlo sería pagar por lo mismo.
+    """
+    lineas: list[str] = []
+    script = BASE / "verify-citations.py"
+    if not en_curso.exists():
+        return lineas
+
+    for carpeta in sorted(p for p in en_curso.iterdir() if p.is_dir()):
+        fuentes = carpeta / "sources"
+        fichas = sorted(fuentes.glob("*.md")) if fuentes.exists() else []
+        if not fichas:
+            continue
+        salida = carpeta / "validation" / "citations.json"
+        if salida.exists() and salida.stat().st_mtime >= max(
+            f.stat().st_mtime for f in fichas
+        ):
+            continue  # ya verificado y ninguna ficha cambió desde entonces
+        if dry:
+            lineas.append(f"VERIFICARÍA citas de {carpeta.name}: {len(fichas)} fichas")
+            continue
+        try:
+            r = subprocess.run(
+                [sys.executable, str(script), *map(str, fichas), "--json"],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=120,
+            )
+            datos = json.loads(r.stdout)
+        except (subprocess.SubprocessError, json.JSONDecodeError, OSError) as exc:
+            lineas.append(f"ERROR citas {carpeta.name}: {exc}")
+            continue
+        salida.parent.mkdir(parents=True, exist_ok=True)
+        salida.write_text(
+            json.dumps(datos, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        verdes = sum(d.get("verificadas") or 0 for d in datos)
+        fallas = sum(d.get("cita_no_coincide") or 0 for d in datos)
+        grises = sum(d.get("sin_fuente") or 0 for d in datos)
+        hallazgos = sum(d.get("hallazgos") or 0 for d in datos)
+        if not hallazgos:
+            # un informe viejo o un entregable que no es ficha: no hay nada que verificar
+            lineas.append(
+                f"CITAS SIN FORMATO {carpeta.name}: ninguna ficha con hallazgos numerados "
+                f"en sources/ (el entregable no es una ficha)"
+            )
+            continue
+        marca = "CITAS FALLIDAS" if fallas else "CITAS"
+        lineas.append(
+            f"{marca} {carpeta.name}: {verdes} verificadas · {fallas} con cita que no coincide · "
+            f"{grises} sin fuente recuperada"
+        )
+    return lineas
+
+
 def main(argv: list[str]) -> int:
     dry = "--dry-run" in argv
     cargar_variables_de_datos()  # el cron no pasa entorno: las rutas se leen del .env del home
@@ -523,6 +592,14 @@ def main(argv: list[str]) -> int:
     # Corre siempre, aunque la cola esté vacía: los pedidos que el orquestador cerró
     # después del barrido anterior tienen que salir en este.
     for linea in despachar(en_curso, dry):
+        print(linea)
+        if linea.startswith("ERROR"):
+            fallos += 1
+
+    # ── barrido 3: la verificación de citas ──────────────────────────────────
+    # Determinista y sin tokens. Corre después del despacho porque necesita las fichas ya
+    # escritas, y es idempotente por mtime: el cron cada 5 minutos no repite trabajo.
+    for linea in verificar_citas(en_curso, dry):
         print(linea)
         if linea.startswith("ERROR"):
             fallos += 1
