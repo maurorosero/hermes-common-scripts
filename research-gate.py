@@ -7,6 +7,9 @@ Tres decisiones, ninguna automatica:
     improve  <uuid> --motivo "..."     no aprobado: vuelve al redactor con el motivo
     present  <uuid> [--formato X]      lo manda al presenter -> estado `waiting`
     show     <uuid>                    el estado del gate, sin tocar nada
+    assets   <uuid>                    el manifiesto contra el disco (--check)
+    panel                              el tablero entero, por etapa (~/research)
+    pending                            solo lo que espera una firma tuya
 
 Convencion copiada de `andrea-ai-project`: la card del gate nace en `blocked` (el
 "pendiente"), que es sticky — nada la toca hasta que el humano decide — y los gates operan
@@ -357,11 +360,185 @@ def verbo_show(uuid: str) -> int:
     return 0
 
 
+def _ficha(carpeta: Path) -> dict:
+    """Lo que hace falta para nombrar una investigacion en una lista, sin abrir nada mas."""
+    datos, _ = _leer(carpeta / "request.md")
+    try:
+        _, plan = _plan(carpeta)
+    except SystemExit:
+        plan = {}
+    return {
+        "uuid": datos.get("uuid") or carpeta.name,
+        "tema": (datos.get("tema") or "(sin tema)").strip(),
+        "estado": datos.get("estado") or "?",
+        "salida": (datos.get("salida_expectada") or {}).get("formato") or "",
+        "gate": plan.get("gate") or "",
+        "redactor": plan.get("redactor") or "",
+        "despachada": bool(plan),
+        "tiene_gate": (carpeta / "validation" / "gate.json").exists(),
+        "carpeta": carpeta,
+    }
+
+
+def _linea(f: dict, extra: str = "") -> str:
+    tema = f["tema"] if len(f["tema"]) <= 42 else f["tema"][:41] + "…"
+    return f"{f['uuid']}  {tema}" + (f"\n              {extra}" if extra else "")
+
+
+def verbo_pending(_uuid: str | None = None) -> int:
+    """Solo lo que espera una firma tuya. Es la vista que se consulta a diario."""
+    esperando: list[dict] = []
+    if PROCESSING.exists():
+        for carpeta in sorted(PROCESSING.iterdir()):
+            if carpeta.is_dir() and (carpeta / "request.md").exists():
+                try:
+                    f = _ficha(carpeta)
+                except SystemExit:
+                    continue
+                if f["gate"] and not f["tiene_gate"]:
+                    esperando.append(f)
+    if not esperando:
+        print("Nada espera tu decision.")
+        return 0
+    print(f"Esperando tu decision: {len(esperando)}\n")
+    for f in esperando:
+        incompletos = _assets_incompletos(f["carpeta"])
+        aviso = ""
+        if incompletos:
+            aviso = (
+                f" · {len(incompletos)} asset(s) incompletos: approve sale con avisos"
+            )
+        print(_linea(f, f"gate {f['gate']}{aviso}"))
+        print(f"              /research approve {f['uuid']}")
+        print(f"              /research show {f['uuid']}")
+        print()
+    return 0
+
+
+def verbo_panel(_uuid: str | None = None) -> int:
+    """El tablero entero de research, por etapa. Sin modelo: lee disco y nada mas."""
+    bloques: dict[str, list[dict]] = {
+        "Esperando tu decision": [],
+        "En curso": [],
+        "Sin cerrar": [],
+        "En presentacion": [],
+        "Aprobadas": [],
+        "En cola": [],
+    }
+    if PROCESSING.exists():
+        for carpeta in sorted(PROCESSING.iterdir()):
+            if not (carpeta.is_dir() and (carpeta / "request.md").exists()):
+                continue
+            try:
+                f = _ficha(carpeta)
+            except SystemExit:
+                continue
+            if f["estado"] == "waiting":
+                bloques["En presentacion"].append(f)
+            elif f["gate"] and not f["tiene_gate"]:
+                bloques["Esperando tu decision"].append(f)
+            elif not f["redactor"]:
+                # Despachada pero sin card de redactor: el estado dice `processing` y la
+                # cadena no cerro. Sonaba a "corriendo" y no lo estaba.
+                bloques["Sin cerrar"].append(f)
+            else:
+                bloques["En curso"].append(f)
+    if READY.exists():
+        for carpeta in sorted(READY.iterdir()):
+            if carpeta.is_dir() and (carpeta / "request.md").exists():
+                try:
+                    f = _ficha(carpeta)
+                except SystemExit:
+                    continue
+                bloques["Aprobadas"].append(f)
+    if REQUESTED.exists():
+        for archivo in sorted(REQUESTED.glob("*.md")):
+            if archivo.name in ("PLANTILLA.md",) or archivo.name.startswith("_"):
+                continue
+            try:
+                datos, _ = _leer(archivo)
+            except SystemExit:
+                continue
+            bloques["En cola"].append(
+                {
+                    "uuid": datos.get("uuid") or archivo.stem,
+                    "tema": (datos.get("tema") or "(sin tema)").strip(),
+                    "estado": "requested",
+                    "salida": "",
+                    "gate": "",
+                    "redactor": "",
+                    "tiene_gate": False,
+                    "carpeta": archivo,
+                }
+            )
+    total = sum(len(v) for v in bloques.values())
+    print(f"RESEARCH · {total} en el tablero\n")
+    if not total:
+        print("Nada. Un pedido se deja en la cola y la puerta lo clasifica.")
+        return 0
+    for titulo, filas in bloques.items():
+        if not filas:
+            continue
+        print(f"{titulo} ({len(filas)})")
+        for f in filas:
+            if titulo == "Esperando tu decision":
+                print(_linea(f, f"gate {f['gate']} · /research approve {f['uuid']}"))
+            elif titulo == "En presentacion":
+                print(
+                    _linea(
+                        f,
+                        f"{f['salida'] or 'formato sin definir'} · esperando al presenter",
+                    )
+                )
+            elif titulo == "Aprobadas":
+                print(_linea(f, f"ready · /research present {f['uuid']}"))
+            elif titulo == "Sin cerrar":
+                print(
+                    _linea(f, "processing sin redactor - hay que relanzarla o cerrarla")
+                )
+            elif titulo == "En curso":
+                if not f["despachada"]:
+                    quien = "sin despacho - la puerta no la tomo"
+                elif not f["redactor"]:
+                    quien = "la cadena no cerro - sin card de redactor"
+                else:
+                    quien = f"redactor {f['redactor']}"
+                print(_linea(f, quien))
+            else:
+                print(_linea(f))
+        print()
+    return 0
+
+
+def verbo_assets(uuid: str) -> int:
+    """El manifiesto contra el disco: que falta renderizar y que referencia rota hay."""
+    carpeta = _carpeta(uuid)
+    ruta = Path(__file__).with_name("render-asset.py")
+    r = subprocess.run(
+        ["python3", str(ruta), str(carpeta), "--check"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    print((r.stdout or "").strip() or (r.stderr or "").strip())
+    print(f"carpeta   {carpeta}")
+    return r.returncode
+
+
 def main(argv: list[str]) -> int:
+    if len(argv) < 2:
+        return verbo_panel()
+    verbo = argv[1]
+    # `panel` y `pending` no hablan de una investigacion: hablan del tablero, asi que no
+    # llevan uuid. Todo lo demas si, y sin el se muestra la ayuda en vez de adivinar.
+    if verbo == "panel":
+        return verbo_panel()
+    if verbo == "pending":
+        return verbo_pending()
     if len(argv) < 3:
         print(__doc__)
         return 2
-    verbo, uuid = argv[1], argv[2]
+    uuid = argv[2]
     if verbo == "approve":
         nota = argv[argv.index("--nota") + 1] if "--nota" in argv else None
         return verbo_approve(uuid, nota)
@@ -377,6 +554,8 @@ def main(argv: list[str]) -> int:
         return verbo_present(uuid, formato, audiencia)
     if verbo == "show":
         return verbo_show(uuid)
+    if verbo == "assets":
+        return verbo_assets(uuid)
     print(__doc__)
     return 2
 
