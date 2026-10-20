@@ -63,7 +63,8 @@ REQUESTED = _raiz("RESEARCH_REQ_PATH", "Research/working/requested")
 PROCESSING = _raiz("RESEARCH_PROC_PATH", "Research/working/processing")
 READY = _raiz("RESEARCH_READY_PATH", "Research/working/ready")
 COLA_DOCUMENTOS = _raiz("RESEARCH_DOCS_PATH", "Research/documentos/requested")
-ARCHIVO = PROCESSING.parent / "_archivo"
+# nombre estructural, en ingles como el resto (sources, validation, deliverables, assets)
+ARCHIVE = PROCESSING.parent / "_archive"
 
 
 def _leer(ruta: Path) -> tuple[dict, str]:
@@ -615,10 +616,10 @@ def verbo_relaunch(uuid: str, barato: bool = False) -> int:
     if archivadas:
         print("CARDS       " + " · ".join(archivadas))
 
-    ARCHIVO.mkdir(parents=True, exist_ok=True)
-    movida = ARCHIVO / carpeta.name
+    ARCHIVE.mkdir(parents=True, exist_ok=True)
+    movida = ARCHIVE / carpeta.name
     if movida.exists():
-        movida = ARCHIVO / f"{carpeta.name}-{dt.datetime.now():%H%M%S}"
+        movida = ARCHIVE / f"{carpeta.name}-{dt.datetime.now():%H%M%S}"
     shutil.move(str(carpeta), str(movida))
     print(f"ARCHIVADA   {movida}")
     print(
