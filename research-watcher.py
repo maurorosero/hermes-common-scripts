@@ -1,31 +1,44 @@
 #!/usr/bin/env python3
-"""Puerta — puente determinista cola/ → board kanban `investigacion`.
+"""Puerta — puente determinista cola/ → board kanban `research`.
 
-Qué hace:
-  1. Barre `cola/*.md` (ignora PLANTILLA.md y README.md).
-  2. Valida cada request con el esquema (research-validator.py).
-  3. Si es ilegible (sin frontmatter cerrado) → lo mueve a `_rechazados/` con el motivo.
-  4. Si es interpretable → crea `en_curso/<I-…>/`, deja ahí el request corregido
-     (con sus `correcciones` y `faltantes`) y crea la card raíz para el prime.
-  5. Sólo borra el archivo de la cola si la card se creó de verdad.
+Qué hace, en dos barridos:
+
+  BARRIDO 1 — la entrada (`requested/`):
+    1. Barre `requested/*.md` (ignora PLANTILLA.md y README.md).
+    2. Valida cada request con el esquema (research-validator.py).
+    3. Si es ilegible (sin frontmatter cerrado) → lo mueve a `_rechazados/` con el motivo.
+    4. Si es interpretable → crea `processing/<I-…>/`, deja ahí el request corregido
+       (con sus `correcciones` y `faltantes`) y crea la card raíz para el orquestador.
+    5. Sólo borra el archivo de la cola si la card se creó de verdad.
+
+  BARRIDO 2 — el despacho (`processing/`):
+    6. Busca investigaciones cuyo request ya tiene `listo_por` (el orquestador pasó) y que
+       todavía no tienen `dispatch.json`.
+    7. Abre una card por ángulo: `researcher` si el ángulo es barato, `researcher-expert` si
+       es experto, todas colgando de la card raíz (`--parent`) y con el uuid de tenant.
+    8. Deja `dispatch.json` en la carpeta con los ids: es la marca de que el despacho ya se
+       hizo, y el mapa del grafo para los barridos siguientes.
 
 Regla dura: si la card falla, el request SE QUEDA en la cola. Nunca se pierde un pedido
 por un fallo del board.
 
 Uso:
-    python3 puerta.py              # procesa la cola
-    python3 puerta.py --dry-run    # informa sin mover ni crear nada
+    python3 research-watcher.py              # los dos barridos
+    python3 research-watcher.py --dry-run    # informa sin mover ni crear nada
 """
 
 from __future__ import annotations
 
 import importlib.util as _ilu
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import yaml
 
 # El validador se llama research-validator.py (con guion, como todos los scripts del
 # proceso), así que no es importable por nombre: se carga por ruta.
@@ -48,22 +61,28 @@ VARS = {
 }
 
 
-def ruta_de(clave: str, obligatoria: bool = True) -> Path | None:
+def ruta_de(clave: str) -> Path:
     var = VARS[clave]
     valor = os.environ.get(var, "").strip()
     if not valor:
-        if obligatoria:
-            raise SystemExit(
-                f"falta {var} en el entorno (.env).\n"
-                f"Sin esa variable no sé dónde está la carpeta de {clave} y no voy a inventarla."
-            )
-        return None
+        raise SystemExit(
+            f"falta {var} en el entorno (.env).\n"
+            f"Sin esa variable no sé dónde está la carpeta de {clave} y no voy a inventarla."
+        )
     return Path(os.path.expandvars(valor)).expanduser()
 
 
 IGNORAR = {"PLANTILLA.md", "README.md"}
 BOARD = "research"
 PRIME = "researcher-prime"
+
+# Un ángulo dice quién lo investiga; acá se traduce a perfil. El default es el barato:
+# si un ángulo no dice nada, no se le regala el motor caro.
+RESEARCHERS = {"barato": "researcher", "experto": "researcher-expert"}
+
+# Marca del despacho: si existe, los hijos de esa investigación ya se crearon.
+MARCA = "dispatch.json"
+
 SUBCARPETAS = ("sources", "validation", "deliverables", "assets")
 
 
@@ -175,6 +194,192 @@ def procesar(
     )
 
 
+# ── barrido 2: el despacho ───────────────────────────────────────────────────
+
+
+def _kanban(args: list[str]) -> tuple[int, str]:
+    """Corre `hermes kanban …` en el board del proceso. Devuelve (rc, salida)."""
+    env = dict(os.environ)
+    env["HERMES_KANBAN_BOARD"] = BOARD
+    env.pop("HERMES_DELEGATED_CHILD_CONTEXT", None)  # un hijo no muta el board
+    try:
+        r = subprocess.run(
+            ["hermes", "kanban", *args],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return 124, "timeout"
+    return r.returncode, (r.stdout or "") + (r.stderr or "")
+
+
+def _cards_del_tenant(uuid: str) -> list[dict]:
+    """Las cards de una investigación. Lista vacía si el board no responde."""
+    rc, txt = _kanban(["list", "--tenant", uuid, "--json"])
+    if rc != 0:
+        return []
+    inicio = txt.find("[")
+    if inicio < 0:
+        return []
+    try:
+        cards = json.loads(txt[inicio:])
+    except json.JSONDecodeError:
+        return []
+    return [c for c in cards if isinstance(c, dict)]
+
+
+def frontmatter_de(ruta: Path) -> dict:
+    """El frontmatter del request, sin pasar por el validador. {} si no se puede leer."""
+    try:
+        texto = ruta.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    m = re.search(r"^---\n(.*?)\n---", texto, re.DOTALL)
+    if not m:
+        return {}
+    try:
+        data = yaml.safe_load(m.group(1)) or {}
+    except yaml.YAMLError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def cuerpo_de_angulo(data: dict, i: int, n: int, carpeta: Path) -> tuple[str, str, str]:
+    """(título de la card, cuerpo, perfil) del ángulo i, en base 1."""
+    ang = data["angulos"][i - 1] if isinstance(data["angulos"][i - 1], dict) else {}
+    titulo = str(ang.get("titulo") or f"ángulo {i}")
+    perfil = RESEARCHERS.get(str(ang.get("investigador") or "barato"), "researcher")
+    salida = ang.get("salida") or f"sources/{perfil}-{i}-{slug(titulo)}.md"
+    lineas = [
+        f"Investigación {data.get('uuid')} · ángulo {i} de {n}",
+        f"Tema: {data.get('tema')}",
+        f"Pedido completo: {carpeta / 'request.md'}",
+        f"Tu salida: {carpeta / str(salida)}",
+        "",
+        f"Alcance: {ang.get('alcance') or '(el que delimita el título)'}",
+    ]
+    preguntas = ang.get("preguntas")
+    if isinstance(preguntas, list) and preguntas:
+        lineas += ["", "Preguntas que hay que responder:"] + [
+            f"  - {p}" for p in preguntas
+        ]
+    fuentes = ang.get("fuentes_sugeridas")
+    if isinstance(fuentes, list) and fuentes:
+        lineas += ["", "Fuentes sugeridas para arrancar:"] + [
+            f"  - {f}" for f in fuentes
+        ]
+    if data.get("instrucciones"):
+        lineas += [
+            "",
+            "Lo que pidió el solicitante:",
+            str(data["instrucciones"]).strip(),
+        ]
+    return f"Ángulo {i}: {titulo}", "\n".join(lineas), perfil
+
+
+def despachar(en_curso: Path, dry: bool) -> list[str]:
+    """Abre las cards de los ángulos de toda investigación ya cerrada por el orquestador."""
+    lineas: list[str] = []
+    if not en_curso.exists():
+        return lineas
+
+    for carpeta in sorted(p for p in en_curso.iterdir() if p.is_dir()):
+        pedido = carpeta / "request.md"
+        if not pedido.exists() or (carpeta / MARCA).exists():
+            continue
+
+        data = frontmatter_de(pedido)
+        if not data.get("listo_por"):
+            continue  # el orquestador todavía no pasó por este pedido
+        if data.get("modo") != "research_swarm":
+            continue  # lo simple no arma grafo: se resuelve inline
+
+        angulos = data.get("angulos")
+        if not isinstance(angulos, list) or not angulos:
+            lineas.append(
+                f"AVISO {carpeta.name}: sin ángulos, no hay a quién despachar"
+            )
+            continue
+
+        uuid = str(data.get("uuid") or carpeta.name)
+        raiz = ""
+        for card in _cards_del_tenant(uuid):
+            if card.get("assignee") == PRIME:
+                raiz = str(card.get("id") or "")
+                break
+
+        n = len(angulos)
+        creadas: list[dict] = []
+        for i in range(1, n + 1):
+            titulo, cuerpo, perfil = cuerpo_de_angulo(data, i, n, carpeta)
+            if dry:
+                lineas.append(f"OK(dry) {carpeta.name}: {titulo} → {perfil}")
+                continue
+            args = [
+                "create",
+                titulo,
+                "--assignee",
+                perfil,
+                "--tenant",
+                uuid,
+                "--idempotency-key",
+                f"{uuid}-a{i}",
+                "--body",
+                cuerpo,
+            ]
+            if raiz:
+                args += ["--parent", raiz]
+            rc, txt = _kanban(args)
+            if rc != 0:
+                lineas.append(
+                    f"ERROR {carpeta.name}: '{titulo}' no se creó (rc={rc}) {txt.strip()[:200]}"
+                )
+                continue
+            m = re.search(r"(t_[A-Za-z0-9]+)", txt)
+            creadas.append(
+                {
+                    "angulo": i,
+                    "titulo": titulo,
+                    "perfil": perfil,
+                    "card": m.group(1) if m else "",
+                }
+            )
+
+        if dry:
+            continue
+
+        plan = {
+            "uuid": uuid,
+            "raiz": raiz,
+            "verificacion": str(data.get("verificacion") or ""),
+            "angulos": creadas,
+            "verifier": None,
+            "redactor": None,
+        }
+        if len(creadas) != n:
+            # despacho incompleto: no se marca como terminado, el próximo barrido reintenta.
+            # La llave de idempotencia evita duplicar las que sí se crearon.
+            (carpeta / f"{MARCA}.parcial").write_text(
+                json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            lineas.append(
+                f"PARCIAL {carpeta.name}: {len(creadas)}/{n} cards — reintenta el próximo barrido"
+            )
+            continue
+
+        (carpeta / MARCA).write_text(
+            json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        conteo = ", ".join(f"{c['perfil']}" for c in creadas)
+        lineas.append(
+            f"DESPACHADO {carpeta.name}: {n} ángulos → {conteo} · raíz {raiz or '(sin raíz)'}"
+        )
+    return lineas
+
+
 def main(argv: list[str]) -> int:
     dry = "--dry-run" in argv
     cola = ruta_de("cola")
@@ -182,24 +387,30 @@ def main(argv: list[str]) -> int:
     # los rechazados viven al lado de la cola: una variable menos que mantener
     rechazados = cola / "_rechazados"
 
-    if not cola.exists():
-        print(f"la cola no existe todavía: {cola} (creala o revisá {VARS['cola']})")
-        return 0
-
     esquema = cargar_esquema()
-    pendientes = [p for p in sorted(cola.glob("*.md")) if p.name not in IGNORAR]
-
-    if not pendientes:
-        return 0  # silencio: nada en la cola
-
     fallos = 0
-    for archivo in pendientes:
-        linea = procesar(archivo, esquema, dry, cola, en_curso, rechazados)
-        if linea is None:  # ya avisado en un barrido anterior
-            continue
+
+    # ── barrido 1: la entrada ────────────────────────────────────────────────
+    if cola.exists():
+        pendientes = [p for p in sorted(cola.glob("*.md")) if p.name not in IGNORAR]
+        for archivo in pendientes:
+            linea = procesar(archivo, esquema, dry, cola, en_curso, rechazados)
+            if linea is None:  # ya avisado en un barrido anterior
+                continue
+            print(linea)
+            if linea.startswith("ERROR"):
+                fallos += 1
+    else:
+        print(f"la cola no existe todavía: {cola} (creala o revisá {VARS['cola']})")
+
+    # ── barrido 2: el despacho ───────────────────────────────────────────────
+    # Corre siempre, aunque la cola esté vacía: los pedidos que el orquestador cerró
+    # después del barrido anterior tienen que salir en este.
+    for linea in despachar(en_curso, dry):
         print(linea)
         if linea.startswith("ERROR"):
             fallos += 1
+
     return 1 if fallos else 0
 
 
