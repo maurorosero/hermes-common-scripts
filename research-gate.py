@@ -475,9 +475,9 @@ def verbo_pending(_uuid: str | None = None) -> int:
             print(
                 f"   Ojo: faltan {len(incompletos)} recurso(s), aprobarlo sale con avisos."
             )
-        print(f"     verlo           /research show {f['uuid']}")
-        print(f"     aprobarlo       /research approve {f['uuid']}")
-        print(f'     pedir cambios   /research improve {f["uuid"]} --motivo "..."')
+        print(f"     leerlo              /research show {f['uuid']}")
+        print(f"     darlo por bueno     /research approve {f['uuid']}")
+        print(f'     pedirle cambios     /research improve {f["uuid"]} --motivo "..."')
         print()
     return 0
 
@@ -545,25 +545,28 @@ def verbo_panel(_uuid: str | None = None) -> int:
     for f in deciden:
         n += 1
         print(f"{n}) {f['tema']}")
-        print("   El informe está listo y espera que lo apruebes.")
-        print(f"     verlo           /research show {f['uuid']}")
-        print(f"     aprobarlo       /research approve {f['uuid']}")
-        print(f'     pedir cambios   /research improve {f["uuid"]} --motivo "..."')
-        print(f"     a documento     /research present {f['uuid']} --formato docx")
+        print("   El informe está terminado y todavía no lo diste por bueno.")
+        print("   Aprobar es sólo eso: darlo por bueno. El documento no se arma solo.")
+        print(f"     leerlo              /research show {f['uuid']}")
+        print(f"     darlo por bueno     /research approve {f['uuid']}")
+        print(f'     pedirle cambios     /research improve {f["uuid"]} --motivo "..."')
+        print(f"     armar el documento  /research present {f['uuid']} --formato docx")
         print()
 
     for f in atascadas:
         n += 1
         print(f"{n}) {f['tema']}")
-        print("   La aprobaste, pero falta el pedido del documento y sin él no avanza.")
-        print(f"     rearmarlo       /research present {f['uuid']}")
+        print(
+            "   Lo diste por bueno, pero el pedido del documento se perdió: así no avanza."
+        )
+        print(f"     rearmar el pedido   /research present {f['uuid']}")
         print()
 
     for f in listas:
         n += 1
         print(f"{n}) {f['tema']}")
-        print("   Aprobada. Si la querés como documento:")
-        print(f"     pasarla         /research present {f['uuid']} --formato docx")
+        print("   Está aprobada. Si querés el documento armado:")
+        print(f"     armar el documento  /research present {f['uuid']} --formato docx")
         print()
 
     def _plural(n: int, uno: str, varios: str) -> str:
