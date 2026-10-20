@@ -76,6 +76,14 @@ IGNORAR = {"PLANTILLA.md", "README.md"}
 BOARD = "research"
 PRIME = "researcher-prime"
 
+# El skill que cada oficio arranca puesto en la card. Sin esto el worker descubre su propio
+# procedimiento a mitad del trabajo, después de haber improvisado.
+SKILL_DEL_OFICIO = {
+    "researcher-prime": "researcher-prime",
+    "researcher": "researcher-detective",
+    "researcher-expert": "researcher-detective",
+}
+
 # Un ángulo dice quién lo investiga; acá se traduce a perfil. El default es el barato:
 # si un ángulo no dice nada, no se le regala el motor caro.
 RESEARCHERS = {"barato": "researcher", "experto": "researcher-expert"}
@@ -86,15 +94,17 @@ MARCA = "dispatch.json"
 SUBCARPETAS = ("sources", "validation", "deliverables", "assets")
 
 
-def crear_card(tema: str, cuerpo: str, uuid: str) -> tuple[int, str]:
-    """Crea la card raíz en el board. Devuelve (returncode, salida)."""
+def crear_card(
+    tema: str, cuerpo: str, uuid: str, perfil: str = PRIME, skill: str = ""
+) -> tuple[int, str]:
+    """Crea una card en el board. Devuelve (returncode, salida)."""
     cmd = [
         "hermes",
         "kanban",
         "create",
         f"Investigación: {tema}",
         "--assignee",
-        PRIME,
+        perfil,
         "--tenant",
         uuid,
         "--idempotency-key",
@@ -102,6 +112,8 @@ def crear_card(tema: str, cuerpo: str, uuid: str) -> tuple[int, str]:
         "--body",
         cuerpo,
     ]
+    if skill:
+        cmd += ["--skill", skill]
     env = dict(os.environ)
     env["HERMES_KANBAN_BOARD"] = BOARD
     env.pop(
@@ -119,6 +131,28 @@ def crear_card(tema: str, cuerpo: str, uuid: str) -> tuple[int, str]:
 def slug(texto: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", texto.lower()).strip("-")
     return s[:60] or "sin-tema"
+
+
+def rutas_resueltas(carpeta: Path) -> str:
+    """Encabezado con las rutas ya compuestas: el worker no tiene que buscarlas.
+
+    La ruta no se escribe en el código: se compone acá, en la corrida, y viaja en la card.
+    Sin esto el worker se gasta una veintena de llamadas averiguando dónde está cada cosa.
+    """
+    return "\n".join(
+        [
+            "Rutas ya resueltas — no las busques ni las compongas:",
+            f"  carpeta:   {carpeta}",
+            f"  request:   {carpeta / 'request.md'}",
+            f"  contrato:  {BASE / 'research-esquema.yaml'}",
+            f"  validador: {BASE / 'research-validator.py'}",
+            "",
+            "El request completo va abajo. Trabajás sobre el archivo, no sobre este mensaje.",
+            "",
+            "─" * 60,
+            "",
+        ]
+    )
 
 
 def procesar(
@@ -182,7 +216,13 @@ def procesar(
     final = recomponer(data, rep["cuerpo"])
     (destino / "request.md").write_text(final, encoding="utf-8")
 
-    rc, salida = crear_card(tema, final, uuid)
+    rc, salida = crear_card(
+        tema,
+        rutas_resueltas(destino) + final,
+        uuid,
+        perfil=PRIME,
+        skill=SKILL_DEL_OFICIO.get(PRIME, ""),
+    )
     if rc != 0:
         # no se pierde el pedido: queda en la cola para el próximo barrido
         return f"ERROR {archivo.name}: la card no se creó (rc={rc}) — el request queda en la cola\n{salida.strip()[:400]}"
@@ -330,6 +370,9 @@ def despachar(en_curso: Path, dry: bool) -> list[str]:
                 "--body",
                 cuerpo,
             ]
+            skill = SKILL_DEL_OFICIO.get(perfil, "")
+            if skill:
+                args += ["--skill", skill]
             if raiz:
                 args += ["--parent", raiz]
             rc, txt = _kanban(args)
