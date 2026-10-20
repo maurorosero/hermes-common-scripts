@@ -153,12 +153,12 @@ def _variantes(cita: str) -> list[str]:
     return list(dict.fromkeys(fuera))
 
 
-_MEMO: dict[str, list[tuple[str, str]]] = {}
+_MEMO: dict[str, list[tuple[str, str, str]]] = {}
 _VIVO: dict[str, tuple[str, str] | None] = {}
 
 
-def recuperado(url: str, entradas: list[dict]) -> list[tuple[str, str]]:
-    """Todas las copias que tenemos de esa URL: (contenido, procedencia).
+def recuperado(url: str, entradas: list[dict]) -> list[tuple[str, str, str]]:
+    """Todas las copias que tenemos de esa URL: (contenido, procedencia, archivo).
 
     Puede haber varias y todas valen: el render de hoy, un extractor que sirvió la página
     desde otro país, la caché de una corrida anterior. Una cita se comprueba contra todas;
@@ -167,7 +167,7 @@ def recuperado(url: str, entradas: list[dict]) -> list[tuple[str, str]]:
     limpia = url.rstrip(".,;").rstrip("/")
     if limpia in _MEMO:
         return _MEMO[limpia]
-    copias: list[tuple[str, str]] = []
+    copias: list[tuple[str, str, str]] = []
     for entrada in entradas:
         if entrada["url"].rstrip(".,;").rstrip("/") != limpia:
             continue
@@ -183,7 +183,7 @@ def recuperado(url: str, entradas: list[dict]) -> list[tuple[str, str]]:
         etiqueta = (
             "evidencia local" if origen == "evidencia local" else f"caché ({origen})"
         )
-        copias.append((contenido, etiqueta))
+        copias.append((contenido, etiqueta, entrada["file"]))
     _MEMO[limpia] = copias
     return copias
 
@@ -256,15 +256,49 @@ def parsear(ruta: Path) -> list[dict]:
     return hallazgos
 
 
+def _avisos(filas: list[dict]) -> list[str]:
+    """Señales deterministas que el verificador con modelo no debería tener que descubrir.
+
+    No son errores: son cosas que hay que mirar. Una sola fuente para diez afirmaciones puede
+    ser correcta (un único documento oficial), pero cambia cuánto sostiene la ficha.
+    """
+    avisos: list[str] = []
+    urls = {u for f in filas for u in f["fuentes"]}
+    if len(filas) > 3 and len(urls) == 1:
+        avisos.append(
+            f"fuente_unica: las {len(filas)} afirmaciones se apoyan en una sola URL — "
+            "no hay contraste entre fuentes independientes"
+        )
+    vistas: dict[str, list[str]] = {}
+    for f in filas:
+        for cita in f.get("citas", []):
+            clave = norm(cita)[:120]
+            if len(clave) < 20:
+                continue
+            vistas.setdefault(clave, []).append(f["claim_id"])
+    for claims in vistas.values():
+        if len(claims) > 1:
+            avisos.append(
+                f"cita_repetida: la misma cita textual sostiene {len(claims)} afirmaciones "
+                f"({', '.join(claims)})"
+            )
+    sin_copia = [f["claim_id"] for f in filas if not f["fuentes_recuperadas"]]
+    if sin_copia:
+        avisos.append(
+            f"sin_evidencia: {len(sin_copia)} afirmaciones sin copia recuperada ({', '.join(sin_copia)})"
+        )
+    return avisos
+
+
 def verificar(ruta: Path, entradas: list[dict], vivo: bool) -> dict:
     hallazgos = parsear(ruta)
     filas = []
     for halo in hallazgos:
-        contenidos: list[tuple[str, str]] = []
+        contenidos: list[tuple[str, str, str]] = []
         for url in dict.fromkeys(halo["urls"]):
             copias = recuperado(url, entradas)
             if not copias and vivo and (viva := refetch(url)):
-                copias = [viva]
+                copias = [(viva[0], viva[1], url)]
             contenidos.extend(copias)
         citas_ok = citas_mal = 0
         for cita in halo["citas"]:
@@ -272,7 +306,7 @@ def verificar(ruta: Path, entradas: list[dict], vivo: bool) -> dict:
             variantes = [v for v in variantes if len(v) >= 4]
             if not variantes:
                 continue
-            if any(v in norm(texto) for v in variantes for texto, _ in contenidos):
+            if any(v in norm(texto) for v in variantes for texto, _, _ in contenidos):
                 citas_ok += 1
             elif contenidos:
                 citas_mal += 1
@@ -285,19 +319,36 @@ def verificar(ruta: Path, entradas: list[dict], vivo: bool) -> dict:
             estado = "verificada"
         else:
             estado = "sin_citas"
+        numero = re.match(r"^(\d+)", halo["titulo"])
         filas.append(
             {
+                "claim_id": f"H-{int(numero.group(1)):02d}"
+                if numero
+                else f"H-{len(filas) + 1:02d}",
                 "hallazgo": halo["titulo"],
                 "estado": estado,
                 "citas_ok": citas_ok,
                 "citas_fallidas": citas_mal,
+                "citas": halo["citas"],
                 "fuentes": halo["urls"],
                 "fuentes_recuperadas": len(contenidos),
-                "procedencia": [p for _, p in contenidos][:2],
+                "procedencia": sorted({p for _, p, _ in contenidos}),
+                "evidencia": sorted({str(ruta) for _, _, ruta in contenidos}),
+                # El estado de la afirmación tiene dos capas: lo que se puede decidir sin
+                # criterio (¿la cita está en la fuente?) y lo que exige juicio (¿la cita
+                # sostiene la afirmación?). La primera se decide acá; la segunda la marca el
+                # verificador con modelo, y sólo para los claims que llegan con evidencia.
+                "claim_status": (
+                    "unverified"
+                    if estado in ("sin_fuente", "cita_no_coincide", "sin_citas")
+                    else None
+                ),
+                "requiere_juicio": estado == "verificada",
             }
         )
     con_fuente = [f for f in filas if f["fuentes_recuperadas"]]
     verdes = [f for f in filas if f["estado"] == "verificada"]
+    avisos = _avisos(filas)
     return {
         "ficha": ruta.name,
         "ruta": str(ruta),
@@ -308,6 +359,8 @@ def verificar(ruta: Path, entradas: list[dict], vivo: bool) -> dict:
         "citation_precision": round(len(verdes) / len(con_fuente), 3)
         if con_fuente
         else None,
+        "fuentes_distintas": len({u for f in filas for u in f["fuentes"]}),
+        "avisos": avisos,
         "detalle": filas,
     }
 

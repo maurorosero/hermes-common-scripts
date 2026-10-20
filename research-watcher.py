@@ -42,6 +42,7 @@ import re
 import shutil
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -556,6 +557,52 @@ def verificar_citas(en_curso: Path, dry: bool) -> list[str]:
                 f"en sources/ (el entregable no es una ficha)"
             )
             continue
+        # ── el contrato que lee el verificador con modelo ────────────────────
+        # Un claim por hallazgo, con su id, su veredicto de citas y la ruta de la evidencia.
+        # Así el verificador abre la evidencia (3 KB) en vez de releer la ficha (12 KB) y no
+        # vuelve a buscar: sólo juzga los que llegan con evidencia.
+        claims = []
+        for informe in datos:
+            for fila in informe.get("detalle", []):
+                claims.append(
+                    {
+                        "id": f"{Path(informe['ficha']).stem}/{fila['claim_id']}",
+                        "claim_id": fila["claim_id"],
+                        "ficha": informe["ficha"],
+                        "afirmacion": fila["hallazgo"],
+                        "estado_citas": fila["estado"],
+                        "citas_ok": fila["citas_ok"],
+                        "citas_fallidas": fila["citas_fallidas"],
+                        "claim_status": fila["claim_status"],
+                        "requiere_juicio": fila["requiere_juicio"],
+                        "fuentes": fila["fuentes"],
+                        "evidencia": fila["evidencia"],
+                    }
+                )
+        contrato = {
+            "uuid": carpeta.name,
+            "generado": datetime.now(UTC).isoformat(timespec="seconds"),
+            "fichas": [informe["ficha"] for informe in datos],
+            "totales": {
+                "claims": len(claims),
+                "verificadas": verdes,
+                "cita_no_coincide": fallas,
+                "sin_fuente": grises,
+                "requieren_juicio": sum(1 for c in claims if c["requiere_juicio"]),
+                "unverified_por_citas": sum(
+                    1 for c in claims if c["claim_status"] == "unverified"
+                ),
+                "fuentes_distintas": sum(
+                    i.get("fuentes_distintas") or 0 for i in datos
+                ),
+            },
+            "avisos": [a for informe in datos for a in (informe.get("avisos") or [])],
+            "claims": claims,
+        }
+        (salida.parent / "claims.json").write_text(
+            json.dumps(contrato, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
         marca = "CITAS FALLIDAS" if fallas else "CITAS"
         lineas.append(
             f"{marca} {carpeta.name}: {verdes} verificadas · {fallas} con cita que no coincide · "
