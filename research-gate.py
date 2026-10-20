@@ -84,16 +84,48 @@ def _escribir(ruta: Path, datos: dict, cuerpo: str) -> None:
     ruta.write_text(VAL.recomponer(datos, cuerpo), encoding="utf-8")
 
 
+def _normalizar(uuid: str) -> str:
+    """Deja el uuid como esta en disco, aunque se escriba de otra forma.
+
+    Un guion de mas, minusculas o el cuerpo solo (`Iua6hzvf`) son la misma investigacion: el
+    handle se escribe a mano en el chat y rechazarlo por la forma es castigar al que lo usa.
+    """
+    limpio = (uuid or "").strip().strip("`'\"")
+    limpio = limpio.lstrip("-–—: ").strip()
+    if not limpio:
+        raise SystemExit("falta el uuid de la investigacion")
+    if "-" in limpio:
+        cuerpo = limpio.split("-", 1)[1]
+    elif re.fullmatch(r"[A-Za-z0-9]{4,}", limpio):
+        cuerpo = limpio
+    else:
+        return limpio
+    return f"I-{cuerpo}"
+
+
 def _carpeta(uuid: str) -> Path:
+    buscado = _normalizar(uuid)
     for raiz in (PROCESSING, READY, REQUESTED):
         if not raiz.exists():
             continue
-        if (raiz / uuid / "request.md").exists():
-            return raiz / uuid
+        if (raiz / buscado / "request.md").exists():
+            return raiz / buscado
         for cand in raiz.iterdir():
-            if cand.is_dir() and cand.name.lower().startswith(uuid.lower()):
+            if cand.is_dir() and cand.name.lower().startswith(buscado.lower()):
                 return cand
-    raise SystemExit(f"no encuentro la investigacion {uuid}")
+    # El error dice que hay, para no obligar a adivinar el uuid.
+    disponibles: list[str] = []
+    for raiz in (PROCESSING, READY, REQUESTED):
+        if raiz.exists():
+            disponibles += [
+                c.name
+                for c in raiz.iterdir()
+                if c.is_dir() and (c / "request.md").exists()
+            ]
+    pista = ", ".join(sorted(disponibles)[:6]) if disponibles else "ninguna"
+    raise SystemExit(
+        f"no encuentro la investigacion '{buscado}'.\n  en el tablero: {pista}"
+    )
 
 
 def _kanban(*args: str) -> tuple[int, str]:
