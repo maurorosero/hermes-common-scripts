@@ -159,9 +159,11 @@ campos:
         tipo: texto
         obligatorio: false
         descripcion: >
-          Archivo que deja el worker, relativo a la carpeta de la investigación. Nombre por
-          convención: sources/researcher-<n>-<slug>.md para el detective y
-          sources/expert-<n>-<slug>.md para el perito. Lo fija el orquestador al cerrar el ángulo.
+          Archivo que deja el worker, relativo a la carpeta de la investigación. El contenido es
+          una ficha de hallazgos (ver el skill researcher-detective), no un informe redactado: el
+          documento lo escribe el redactor. Nombre por convención:
+          sources/researcher-<n>-<slug>.md para el detective y sources/expert-<n>-<slug>.md para
+          el perito. Lo fija el orquestador al cerrar el ángulo.
       investigador:
         tipo: enum
         dominio: [barato, experto]

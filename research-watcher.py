@@ -362,6 +362,11 @@ def cuerpo_de_angulo(data: dict, i: int, n: int, carpeta: Path) -> tuple[str, st
         f"Tema: {data.get('tema')}",
         f"Pedido completo: {carpeta / 'request.md'}",
         f"Tu salida: {carpeta / str(salida)}",
+        (
+            "Formato de la salida: ficha de hallazgos del skill researcher-detective — de 5 a "
+            "15, cada uno con cita literal, fuente y fecha, más discrepancias y huecos. El "
+            "informe lo escribe otro: vos no redactás prosa."
+        ),
         "",
         f"Alcance: {ang.get('alcance') or '(el que delimita el título)'}",
     ]
