@@ -32,6 +32,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import unicodedata
@@ -428,6 +429,43 @@ def verbo_show(uuid: str) -> int:
     return 0
 
 
+def _tablero(uuid: str, plan: dict) -> str:
+    """En que esta la cadena de esta investigacion, mirando el tablero y no los archivos.
+
+    `gate.json` guarda la decision anterior: una investigacion devuelta y vuelta a redactar
+    conserva el suyo, asi que creerle hace que el panel diga "trabajando" cuando lo que hay es
+    una firma esperando. Se devuelve: decide | trabaja | cortada.
+    """
+    base = Path(os.environ.get("HERMES_HOME") or (HOME / ".hermes"))
+    db = base / "kanban" / "boards" / BOARD / "kanban.db"
+    if not db.exists():
+        return "trabaja"
+    cards = [
+        plan.get(k) for k in ("raiz", "verifier", "redactor", "gate") if plan.get(k)
+    ] + [a.get("card") for a in plan.get("angulos") or [] if a.get("card")]
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            for card in cards:
+                fila = con.execute(
+                    "SELECT status FROM tasks WHERE id = ?", (card,)
+                ).fetchone()
+                if fila and fila[0] in ("running", "ready", "review"):
+                    return "trabaja"
+            firma = con.execute(
+                "SELECT id FROM tasks WHERE title = ? AND status = 'blocked' "
+                "ORDER BY rowid DESC LIMIT 1",
+                (f"Gate humano: {uuid}",),
+            ).fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return "trabaja"
+    if firma:
+        return "decide"
+    return "cortada"
+
+
 def _ficha(carpeta: Path) -> dict:
     """Lo que hace falta para nombrar una investigacion en una lista, sin abrir nada mas."""
     datos, _ = _leer(carpeta / "request.md")
@@ -445,6 +483,7 @@ def _ficha(carpeta: Path) -> dict:
         "redactor": plan.get("redactor") or "",
         "despachada": bool(plan),
         "tiene_gate": (carpeta / "validation" / "gate.json").exists(),
+        "etapa": _tablero(datos.get("uuid") or carpeta.name, plan),
         "carpeta": carpeta,
     }
 
@@ -582,8 +621,10 @@ def verbo_panel(_uuid: str | None = None) -> int:
                 continue
             if f["estado"] == "waiting":
                 filas.append(("atascada", f))
-            elif f["gate"] and not f["tiene_gate"]:
+            elif f["etapa"] == "decide":
                 filas.append(("decide", f))
+            elif f["etapa"] == "cortada":
+                filas.append(("cortada", f))
             else:
                 filas.append(("trabaja", f))
     if READY.exists():
@@ -643,6 +684,10 @@ def verbo_panel(_uuid: str | None = None) -> int:
             print(f"   {_documento(f['carpeta'], f['uuid'])}")
         elif tipo == "trabaja":
             print("   Está trabajando sola ahora mismo. No tenés que hacer nada.")
+        elif tipo == "cortada":
+            print("   Se cortó a mitad de camino: ninguna card sigue viva.")
+            print(f"     relanzarla          /research relaunch {f['uuid']}")
+            print(f"     archivarla          /research archive {f['uuid']}")
         else:
             print("   Esperando que la puerta la tome. No tenés que hacer nada.")
         print()
