@@ -334,9 +334,17 @@ def verbo_improve(uuid: str, motivo: str) -> int:
 def verbo_present(uuid: str, formato: str | None, audiencia: str | None) -> int:
     carpeta = _carpeta(uuid)
     datos, cuerpo = _leer(carpeta / "request.md")
-    if datos.get("estado") not in ("ready", "waiting"):
+    # Solo lo aprobado se manda a documento: `ready` es donde termina una investigacion que
+    # paso el gate humano. Si todavia esta en curso no hay nada que presentar.
+    if datos.get("estado") != "ready":
         raise SystemExit(
-            f"{uuid}: primero hay que aprobarla (estado actual: {datos.get('estado')})"
+            f"{uuid}: primero hay que darla por buena — está en '{datos.get('estado')}'.\n"
+            f"  aprobarla: /research approve {uuid}"
+        )
+    if carpeta.parent.resolve() != READY.resolve():
+        raise SystemExit(
+            f"{uuid}: el estado dice ready pero la carpeta está en {carpeta.parent.name}/.\n"
+            f"  una aprobada vive en ready/: revisá esto antes de presentarla."
         )
     salida_expectada = datos.get("salida_expectada") or {}
     formato = formato or salida_expectada.get("formato") or "md"
@@ -363,6 +371,7 @@ def verbo_present(uuid: str, formato: str | None, audiencia: str | None) -> int:
         brief, allow_unicode=True, sort_keys=False, default_flow_style=False
     )
     COLA_DOCUMENTOS.mkdir(parents=True, exist_ok=True)
+    (carpeta / "deliverables").mkdir(parents=True, exist_ok=True)
     destino_cola = COLA_DOCUMENTOS / f"{uuid}.yaml"
     destino_cola.write_text(texto, encoding="utf-8")
     (carpeta / "deliverables" / "document-brief.yaml").write_text(
