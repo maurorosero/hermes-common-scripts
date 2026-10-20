@@ -133,7 +133,20 @@ campos:
       salida:
         tipo: texto
         obligatorio: false
-        descripcion: Archivo que deja el worker.
+        descripcion: >
+          Archivo que deja el worker, relativo a la carpeta de la investigación. Nombre por
+          convención: sources/researcher-<n>-<slug>.md para el detective y
+          sources/expert-<n>-<slug>.md para el perito. Lo fija el orquestador al cerrar el ángulo.
+      investigador:
+        tipo: enum
+        dominio: [barato, experto]
+        obligatorio: false
+        escrito_por: orquestador
+        descripcion: >
+          Quién investiga este ángulo. barato = el detective común, un modelo rápido.
+          experto = el perito con motor MoE, para el ángulo donde el dato es caro de errar
+          o las fuentes se contradicen. El default es barato: el experto es escaso por
+          diseño, y un pedido con todos los ángulos en experto está mal descompuesto.
 
   instrucciones:
     tipo: texto
@@ -204,6 +217,17 @@ campos:
       fuera de dominio que mapeó, ángulos que sugiere y no creó (cuando angulos_modo es
       solo_estos), y datos que sólo la fuente tiene. No es un registro técnico: es la
       conversación pendiente con quien pidió la investigación.
+
+  verificacion:
+    tipo: enum
+    dominio: ["si", "no"]
+    obligatorio: false
+    escrito_por: orquestador
+    descripcion: >
+      Si el resultado va a sostener una decisión, se verifica. Si el pedido es para saber,
+      no se verifica y el ahorro es total. Cuando es si, el verificador toma sólo los
+      hallazgos que el detective marcó como decisivos y contrasta cada uno contra la fuente
+      que ese hallazgo ya citó: un acceso por claim, sin buscar y sin cadenas.
 
 reglas:
   - nombre: coherencia_modo

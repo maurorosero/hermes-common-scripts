@@ -287,6 +287,16 @@ def validar(texto: str, esquema: dict | None = None) -> dict:
                     reporte["faltantes"].append(
                         f"angulos[{i}].{sub}: campo no declarado en el esquema"
                     )
+                    continue
+                spec_sub = spec_ang[sub]
+                valor_sub = ang[sub]
+                if spec_sub.get("tipo") == "enum" and valor_sub not in spec_sub.get(
+                    "dominio", []
+                ):
+                    reporte["faltantes"].append(
+                        f"angulos[{i}].{sub}: '{valor_sub}' no está en "
+                        f"{'/'.join(map(str, spec_sub.get('dominio', [])))}"
+                    )
             limpios.append(ang)
         data["angulos"] = limpios
 
@@ -325,6 +335,20 @@ def validar(texto: str, esquema: dict | None = None) -> dict:
                 reporte["faltantes"].append(
                     f"regla {nombre}: angulos_modo=solo_estos exige lista de angulos"
                 )
+
+    # --- dominio de lo que escriben las puertas ----------------------------
+    # Estos campos no se corrigen (el valor lo pone la puerta, no el validador), pero un
+    # valor fuera de dominio sí se reporta: es una pregunta para el orquestador, no un dato.
+    # Va al final, cuando la clasificación ya puso complejidad y modo.
+    for nombre, spec in campos.items():
+        if not spec.get("escrito_por") or spec.get("tipo") != "enum":
+            continue
+        valor_p = data.get(nombre)
+        if valor_p in (None, "", [], {}) or valor_p in spec.get("dominio", []):
+            continue
+        reporte["faltantes"].append(
+            f"{nombre}: '{valor_p}' no está en {'/'.join(map(str, spec.get('dominio', [])))}"
+        )
 
     reporte["data"] = data
     return reporte
