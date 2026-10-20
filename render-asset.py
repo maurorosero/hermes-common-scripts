@@ -84,9 +84,19 @@ def claims_del_contrato(carpeta: Path) -> set[str]:
 
 
 def referencias_del_informe(ruta: Path) -> set[str]:
+    """Las rutas resueltas de las imágenes que cita el informe.
+
+    El informe vive en `deliverables/` y los assets en `assets/`, así que la cita correcta es
+    `../assets/<archivo>`. Se resuelve siempre contra la carpeta del informe para que la
+    comparación no dependa de cómo se escribió la ruta.
+    """
     if not ruta.exists():
         return set()
-    return {m.strip() for m in RE_IMAGEN.findall(ruta.read_text())}
+    base = ruta.parent
+    return {
+        (base / m.strip()).resolve().as_posix()
+        for m in RE_IMAGEN.findall(ruta.read_text())
+    }
 
 
 def validar(datos: dict, carpeta: Path, informe: Path) -> list[str]:
@@ -117,7 +127,7 @@ def validar(datos: dict, carpeta: Path, informe: Path) -> list[str]:
                     problemas.append(f"{aid}: el claim {cid} no existe en claims.json")
             if not a.get("spec"):
                 problemas.append(f"{aid}: falta el bloque `spec`")
-            if archivo not in refs:
+            if (carpeta / archivo).resolve().as_posix() not in refs:
                 problemas.append(
                     f"{aid}: un asset de research que el informe no referencia es trabajo perdido"
                 )
@@ -126,10 +136,13 @@ def validar(datos: dict, carpeta: Path, informe: Path) -> list[str]:
                 f"{aid}: una ilustracion necesita `spec.prompt` para el presenter"
             )
 
+    declarados = {
+        (carpeta / str(a.get("archivo"))).resolve().as_posix() for a in datos["assets"]
+    }
     for ref in refs:
         if ref.startswith("http"):
             continue
-        if ref not in {str(a.get("archivo")) for a in datos["assets"]}:
+        if ref not in declarados:
             problemas.append(
                 f"el informe referencia '{ref}' y no esta en el manifiesto"
             )
