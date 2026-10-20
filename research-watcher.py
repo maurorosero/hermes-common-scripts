@@ -25,11 +25,17 @@ Qué hace, en dos barridos:
        tokens: comprueba que la fuente se recuperó de verdad y que la cita literal está dentro.
    10. Es idempotente por mtime: si el JSON es más nuevo que las fichas, no se repite.
 
+  BARRIDO 4 — el cierre del grafo (`processing/`):
+   11. Cuando todos los ángulos están cerrados y existe `validation/claims.json`, crea la card
+       del verificador: juzga los claims y escribe `validation/verdicts.json`.
+   12. Cuando esa card cierra y hay veredictos, crea la card del redactor, que escribe
+       `deliverables/informe.md`. Si el request no pedía verificación, se la salta.
+
 Regla dura: si la card falla, el request SE QUEDA en la cola. Nunca se pierde un pedido
 por un fallo del board.
 
 Uso:
-    python3 research-watcher.py              # los tres barridos
+    python3 research-watcher.py              # los cuatro barridos
     python3 research-watcher.py --dry-run    # informa sin mover ni crear nada
 """
 
@@ -577,6 +583,7 @@ def verificar_citas(en_curso: Path, dry: bool) -> list[str]:
                         "requiere_juicio": fila["requiere_juicio"],
                         "fuentes": fila["fuentes"],
                         "evidencia": fila["evidencia"],
+                        "contexto": fila.get("contexto") or [],
                     }
                 )
         contrato = {
@@ -608,6 +615,164 @@ def verificar_citas(en_curso: Path, dry: bool) -> list[str]:
             f"{marca} {carpeta.name}: {verdes} verificadas · {fallas} con cita que no coincide · "
             f"{grises} sin fuente recuperada"
         )
+    return lineas
+
+
+def _cuerpo_del_verificador(uuid: str, carpeta: Path, plan: dict) -> str:
+    return "\n".join(
+        [
+            f"Investigación {uuid}: los ángulos terminaron y la verificación de citas ya corrió.",
+            "",
+            "Rutas ya resueltas — no las busques ni las compongas:",
+            f"  claims:    {carpeta / 'validation' / 'claims.json'}",
+            f"  fichas:    {carpeta / 'sources'}",
+            f"  tu salida: {carpeta / 'validation' / 'verdicts.json'}",
+            "",
+            "Cargá el skill `researcher-verifier` y seguí su procedimiento.",
+            "",
+            "En corto: leé `claims.json` una vez, juzgá **sólo** los claims con",
+            "`requiere_juicio: true`, y escribí `verdicts.json` una sola vez con un registro",
+            'por claim. Los que ya traen `claim_status: "unverified"` están resueltos por el',
+            "verificador de citas: se copian, no se rejuzgan.",
+            "",
+            "La evidencia de cada claim ya está en disco y su ruta viaja en el campo",
+            "`evidencia`. Abrí ese archivo; no hagas un fetch si alcanza. No busques fuentes",
+            "nuevas: no es tu oficio y no hay tiempo para eso.",
+        ]
+    )
+
+
+def _cuerpo_del_redactor(uuid: str, carpeta: Path, plan: dict) -> str:
+    return "\n".join(
+        [
+            f"Investigación {uuid}: los veredictos están emitidos. Falta el documento.",
+            "",
+            "Rutas ya resueltas — no las busques ni las compongas:",
+            f"  fichas:    {carpeta / 'sources'}",
+            f"  claims:    {carpeta / 'validation' / 'claims.json'}",
+            f"  veredictos:{carpeta / 'validation' / 'verdicts.json'}",
+            f"  request:   {carpeta / 'request.md'}",
+            f"  tu salida: {carpeta / 'deliverables' / 'informe.md'}",
+            "",
+            "Cargá el skill `redactor-documento` y seguí su procedimiento.",
+            "",
+            "Tu material son las fichas, los claims y los veredictos: no investigues ni abras",
+            "fuentes nuevas. Cada dato del informe se rastrea a un `claim_id`; lo que está",
+            "`unverified` o `contradicted` no se afirma, se declara en la sección de límites.",
+        ]
+    )
+
+
+def cerrar(en_curso: Path, dry: bool) -> list[str]:
+    """Barrido 4 — cierra el grafo: primero el verificador, después el redactor.
+
+    El verificador no se crea hasta que **todos** los ángulos están cerrados, y el redactor no
+    se crea hasta que existe `verdicts.json`. Cada etapa es una card más en el mesmo tenant, así
+    que el grafo completo de una investigación se lee de un vistazo en el board.
+
+    Las dos etapas son idempotentes por el `dispatch.json`: una vez anotado el id, no se repite.
+    """
+    lineas: list[str] = []
+    if not en_curso.exists():
+        return lineas
+
+    for carpeta in sorted(p for p in en_curso.iterdir() if p.is_dir()):
+        marca = carpeta / MARCA
+        if not marca.exists():
+            continue
+        try:
+            plan = json.loads(marca.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        uuid = plan.get("uuid") or carpeta.name
+        cards = {c.get("id"): c.get("status") for c in _cards_del_tenant(uuid)}
+        cerradas = ("done", "archived")
+
+        angulos_ok = all(
+            cards.get(a.get("card", "")) in cerradas for a in plan.get("angulos", [])
+        )
+        claims = carpeta / "validation" / "claims.json"
+        verdicts = carpeta / "validation" / "verdicts.json"
+        verificar = str(plan.get("verificacion") or "").strip().casefold() in (
+            "si",
+            "sí",
+            "true",
+            "1",
+        )
+
+        # ── etapa A: el verificador ──────────────────────────────────────────
+        if not plan.get("verifier") and angulos_ok and claims.exists():
+            if not verificar:
+                plan["verifier"] = "omitido"  # el pedido no pedía verificación
+                lineas.append(f"VERIFICACIÓN OMITIDA {uuid}: el request no la pedía")
+            elif dry:
+                lineas.append(f"CREARÍA verificador {uuid}")
+            else:
+                args = [
+                    "create",
+                    f"Verificar: {uuid}",
+                    "--assignee",
+                    "researcher-verifier",
+                    "--tenant",
+                    uuid,
+                    "--idempotency-key",
+                    f"{uuid}-v",
+                    "--skill",
+                    "researcher-verifier",
+                    "--body",
+                    _cuerpo_del_verificador(uuid, carpeta, plan),
+                ]
+                if plan.get("raiz"):
+                    args += ["--parent", plan["raiz"]]
+                rc, txt = _kanban(args)
+                if rc != 0:
+                    lineas.append(f"ERROR verificador {uuid}: {txt.strip()[:200]}")
+                    continue
+                m = re.search(r"(t_[A-Za-z0-9]+)", txt)
+                plan["verifier"] = m.group(1) if m else ""
+                lineas.append(
+                    f"DESPACHADO verificador {uuid} → {plan['verifier'] or '(sin id)'}"
+                )
+
+        # ── etapa B: el redactor ─────────────────────────────────────────────
+        estado_verificador = cards.get(plan.get("verifier") or "")
+        listo_para_redactar = (
+            plan.get("verifier") == "omitido" or estado_verificador in cerradas
+        )
+        if not plan.get("redactor") and listo_para_redactar and verdicts.exists():
+            if dry:
+                lineas.append(f"CREARÍA redactor {uuid}")
+            else:
+                args = [
+                    "create",
+                    f"Redactar: {uuid}",
+                    "--assignee",
+                    "redactor",
+                    "--tenant",
+                    uuid,
+                    "--idempotency-key",
+                    f"{uuid}-r",
+                    "--skill",
+                    "redactor-documento",
+                    "--body",
+                    _cuerpo_del_redactor(uuid, carpeta, plan),
+                ]
+                if plan.get("raiz"):
+                    args += ["--parent", plan["raiz"]]
+                rc, txt = _kanban(args)
+                if rc != 0:
+                    lineas.append(f"ERROR redactor {uuid}: {txt.strip()[:200]}")
+                    continue
+                m = re.search(r"(t_[A-Za-z0-9]+)", txt)
+                plan["redactor"] = m.group(1) if m else ""
+                lineas.append(
+                    f"DESPACHADO redactor {uuid} → {plan['redactor'] or '(sin id)'}"
+                )
+
+        if not dry and (plan.get("verifier") or plan.get("redactor")):
+            marca.write_text(
+                json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
     return lineas
 
 
@@ -647,6 +812,13 @@ def main(argv: list[str]) -> int:
     # Determinista y sin tokens. Corre después del despacho porque necesita las fichas ya
     # escritas, y es idempotente por mtime: el cron cada 5 minutos no repite trabajo.
     for linea in verificar_citas(en_curso, dry):
+        print(linea)
+        if linea.startswith("ERROR"):
+            fallos += 1
+
+    # ── barrido 4: el cierre del grafo ───────────────────────────────────────
+    # Verificador cuando los ángulos cerraron y hay claims; redactor cuando hay veredictos.
+    for linea in cerrar(en_curso, dry):
         print(linea)
         if linea.startswith("ERROR"):
             fallos += 1

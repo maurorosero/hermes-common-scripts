@@ -256,6 +256,24 @@ def parsear(ruta: Path) -> list[dict]:
     return hallazgos
 
 
+def _pasaje(texto: str, cita: str, ancho: int = 260) -> str | None:
+    """El tramo del documento alrededor de la cita, tal como está escrito.
+
+    Se busca con un patrón que tolera diferencias de espacios en vez de un substring exacto,
+    porque así los offsets siguen siendo válidos sobre el texto original y el pasaje se puede
+    citar literal. Es lo que el verificador lee: 500 caracteres en vez de 13 KB de documento.
+    """
+    palabras = [p for p in cita.split() if p]
+    if len(palabras) < 2:
+        return None
+    patron = re.compile(r"\s+".join(re.escape(p) for p in palabras))
+    m = patron.search(texto)
+    if not m:
+        return None
+    ini, fin = max(0, m.start() - ancho), min(len(texto), m.end() + ancho)
+    return re.sub(r"\s+", " ", texto[ini:fin]).strip()
+
+
 def _avisos(filas: list[dict]) -> list[str]:
     """Señales deterministas que el verificador con modelo no debería tener que descubrir.
 
@@ -301,13 +319,27 @@ def verificar(ruta: Path, entradas: list[dict], vivo: bool) -> dict:
                 copias = [(viva[0], viva[1], url)]
             contenidos.extend(copias)
         citas_ok = citas_mal = 0
+        pasajes: list[dict] = []
         for cita in halo["citas"]:
             variantes = [norm(v) for v in _variantes(cita)]
             variantes = [v for v in variantes if len(v) >= 4]
             if not variantes:
                 continue
-            if any(v in norm(texto) for v in variantes for texto, _, _ in contenidos):
+            hallada = [
+                (texto, ruta)
+                for texto, _, ruta in contenidos
+                if any(v in norm(texto) for v in variantes)
+            ]
+            if hallada:
                 citas_ok += 1
+                if len(pasajes) < 3:
+                    for texto, archivo in hallada[:1]:
+                        tramo = _pasaje(texto, cita)
+                        if tramo:
+                            pasajes.append(
+                                {"cita": cita, "archivo": archivo, "pasaje": tramo}
+                            )
+                            break
             elif contenidos:
                 citas_mal += 1
             # sin contenido recuperado no se cuenta como cita fallida: no hay nada que comprobar
@@ -334,6 +366,7 @@ def verificar(ruta: Path, entradas: list[dict], vivo: bool) -> dict:
                 "fuentes_recuperadas": len(contenidos),
                 "procedencia": sorted({p for _, p, _ in contenidos}),
                 "evidencia": sorted({str(ruta) for _, _, ruta in contenidos}),
+                "contexto": pasajes,
                 # El estado de la afirmación tiene dos capas: lo que se puede decidir sin
                 # criterio (¿la cita está en la fuente?) y lo que exige juicio (¿la cita
                 # sostiene la afirmación?). La primera se decide acá; la segunda la marca el
