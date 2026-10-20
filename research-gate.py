@@ -207,6 +207,23 @@ def _brief(
     }
 
 
+def _mover_a_ready(carpeta: Path) -> Path:
+    """Una investigacion aprobada termina en `ready/`.
+
+    Ahi vive lo que ya paso el gate humano: la investigacion esta completa y exitosa. Que la
+    carpeta se quede en `processing/` con el estado en `ready` deja el disco mintiendo sobre
+    donde esta el trabajo terminado.
+    """
+    if carpeta.parent.resolve() == READY.resolve():
+        return carpeta
+    READY.mkdir(parents=True, exist_ok=True)
+    destino = READY / carpeta.name
+    if destino.exists():
+        destino = READY / f"{carpeta.name}-{dt.datetime.now():%H%M%S}"
+    shutil.move(str(carpeta), str(destino))
+    return destino
+
+
 def verbo_approve(uuid: str, nota: str | None) -> int:
     carpeta = _carpeta(uuid)
     datos, cuerpo = _leer(carpeta / "request.md")
@@ -230,7 +247,9 @@ def verbo_approve(uuid: str, nota: str | None) -> int:
     datos["estado"] = "ready"
     _escribir(carpeta / "request.md", datos, cuerpo)
     _gate(carpeta, datos, "aprobado", card=card, nota=nota)
+    destino = _mover_a_ready(carpeta)
     print(f"{uuid}: aprobada -> ready (card de gate {card or 'inexistente'})")
+    print(f"  termina en: {destino}")
     return 0
 
 
@@ -350,7 +369,9 @@ def verbo_present(uuid: str, formato: str | None, audiencia: str | None) -> int:
         texto, encoding="utf-8"
     )
 
-    datos["estado"] = "waiting"
+    # El documento es opcional: la investigacion sigue terminada en `ready` y el pedido queda
+    # anotado en el gate. Bajar el estado a `waiting` deshacia la aprobacion.
+    datos["estado"] = "ready"
     _escribir(carpeta / "request.md", datos, cuerpo)
     _gate(
         carpeta,
@@ -360,7 +381,7 @@ def verbo_present(uuid: str, formato: str | None, audiencia: str | None) -> int:
         audiencia=audiencia,
         brief=str(destino_cola),
     )
-    print(f"{uuid}: enviada al presenter -> waiting")
+    print(f"{uuid}: pedido de documento anotado (la investigacion sigue aprobada)")
     print(f"  brief: {destino_cola}")
     print(f"  salida esperada: {salida}")
     return 0
@@ -481,6 +502,25 @@ def _linea(f: dict, extra: str = "") -> str:
     return f"{f['uuid']}  {tema}" + (f"\n              {extra}" if extra else "")
 
 
+def _documento(carpeta: Path, uuid: str) -> str:
+    """El documento es opcional: se informa en que quedo, no se reclama."""
+    gate = carpeta / "validation" / "gate.json"
+    registrado = ""
+    if gate.exists():
+        try:
+            registrado = str(json.loads(gate.read_text()).get("brief") or "")
+        except (OSError, json.JSONDecodeError):
+            registrado = ""
+    if registrado and Path(registrado).exists():
+        return "Le pediste el documento y está en la cola esperando que lo armen."
+    if registrado:
+        return (
+            "Le pediste el documento pero el pedido se perdió: si todavía lo querés, "
+            f"/research present {uuid}"
+        )
+    return f"Si querés el documento armado: /research present {uuid} --formato docx"
+
+
 def verbo_pending(_uuid: str | None = None) -> int:
     """Solo lo que espera tu firma, con las palabras de todos los dias."""
     esperando: list[dict] = []
@@ -587,15 +627,11 @@ def verbo_panel(_uuid: str | None = None) -> int:
                 f"     armar el documento  /research present {f['uuid']} --formato docx"
             )
         elif tipo == "atascada":
-            print(
-                "   La diste por buena, pero el pedido del documento se perdió: así no avanza."
-            )
-            print(f"     rearmar el pedido   /research present {f['uuid']}")
+            print("   Está aprobada: la investigación terminó.")
+            print(f"   {_documento(f['carpeta'], f['uuid'])}")
         elif tipo == "aprobada":
-            print("   Está aprobada. Si querés el documento armado:")
-            print(
-                f"     armar el documento  /research present {f['uuid']} --formato docx"
-            )
+            print("   Terminada y aprobada.")
+            print(f"   {_documento(f['carpeta'], f['uuid'])}")
         elif tipo == "trabaja":
             print("   Está trabajando sola ahora mismo. No tenés que hacer nada.")
         else:
