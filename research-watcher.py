@@ -61,6 +61,40 @@ VARS = {
 }
 
 
+def _env_del_home() -> Path:
+    """El `.env` del home activo. Se compone: HERMES_HOME si está, si no el home del usuario."""
+    home = os.environ.get("HERMES_HOME", "").strip() or str(Path.home() / ".hermes")
+    return Path(home) / ".env"
+
+
+def cargar_variables_de_datos() -> list[str]:
+    """Trae las RESEARCH_* del `.env` del home cuando el proceso no las tiene.
+
+    El cron corre el script sin el entorno del shell, así que las variables del `.env` no
+    llegan solas: sin esto el barrido falla con "falta RESEARCH_REQ_PATH". Se leen sólo las
+    variables de rutas de datos; el resto del archivo no se toca.
+
+    Devuelve las que siguen faltando después de intentarlo.
+    """
+    faltan = [v for v in VARS.values() if not os.environ.get(v, "").strip()]
+    if not faltan:
+        return []
+
+    ruta = _env_del_home()
+    if ruta.exists():
+        for linea in ruta.read_text(encoding="utf-8").splitlines():
+            linea = linea.strip()
+            if not linea or linea.startswith("#") or "=" not in linea:
+                continue
+            clave, _, valor = linea.partition("=")
+            clave = clave.strip()
+            valor = valor.strip().strip('"').strip("'")
+            if clave in VARS.values() and valor and not os.environ.get(clave):
+                os.environ[clave] = os.path.expandvars(valor)
+
+    return [v for v in VARS.values() if not os.environ.get(v, "").strip()]
+
+
 def ruta_de(clave: str) -> Path:
     var = VARS[clave]
     valor = os.environ.get(var, "").strip()
@@ -425,6 +459,7 @@ def despachar(en_curso: Path, dry: bool) -> list[str]:
 
 def main(argv: list[str]) -> int:
     dry = "--dry-run" in argv
+    cargar_variables_de_datos()  # el cron no pasa entorno: las rutas se leen del .env del home
     cola = ruta_de("cola")
     en_curso = ruta_de("en_curso")
     # los rechazados viven al lado de la cola: una variable menos que mantener
