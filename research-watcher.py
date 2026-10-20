@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Puerta — puente determinista cola/ → board kanban `research`.
 
-Qué hace, en dos barridos:
+Qué hace, en cinco barridos:
 
   BARRIDO 1 — la entrada (`requested/`):
     1. Barre `requested/*.md` (ignora PLANTILLA.md y README.md).
@@ -37,6 +37,16 @@ por un fallo del board.
 Uso:
     python3 research-watcher.py              # los cuatro barridos
     python3 research-watcher.py --dry-run    # informa sin mover ni crear nada
+   12. Cuando esa card cierra y hay `validation/verdicts.json`, crea la card del redactor: escribe
+       el documento y especifica sus assets en `assets/manifiesto.yaml`.
+
+  BARRIDO 5 — el gate humano (`processing/`):
+   13. Cuando el redactor cerró y existe `deliverables/informe.md`, abre una card de gate en
+       `blocked` (el "pendiente" de la casa). Ningún agente la ejecuta: la cierra una persona
+       con `research-gate.py approve|improve|present`. `done` es terminal, por eso la aprobación
+       vive en una card aparte y no en la del redactor.
+   14. Idempotente por `dispatch.json[gate]`; la clave de idempotencia cambia por corrida, así
+       que una corrección abre un gate nuevo en vez de colisionar con el anterior.
 """
 
 from __future__ import annotations
@@ -260,6 +270,9 @@ def procesar(
 
     for sub in SUBCARPETAS:
         (destino / sub).mkdir(parents=True, exist_ok=True)
+    # El pedido deja la cola: el recorrido del esquema arranca en `processing`. Sin esto el
+    # request se queda en `requested` para siempre y el estado deja de decir dónde está.
+    data["estado"] = "processing"
     final = recomponer(data, rep["cuerpo"])
     (destino / "request.md").write_text(final, encoding="utf-8")
 
@@ -776,6 +789,88 @@ def cerrar(en_curso: Path, dry: bool) -> list[str]:
     return lineas
 
 
+def _cuerpo_del_gate(uuid: str, carpeta: Path, plan: dict, informe: Path) -> str:
+    """Lo que el humano necesita para decidir, sin abrir nada mas."""
+    manifiesto = carpeta / "assets" / "manifiesto.yaml"
+    return "\n".join(
+        [
+            f"Investigación {uuid} terminada. El informe y sus assets están listos.",
+            "",
+            "Para revisar:",
+            f"  informe    {informe}",
+            f"  assets     {carpeta / 'assets'}",
+            f"  veredictos {carpeta / 'validation' / 'verdicts.json'}",
+            f"  manifiesto {'(sin assets)' if not manifiesto.exists() else manifiesto}",
+            "",
+            "Tres decisiones, ninguna automática:",
+            f"  aprobar        python3 $HOME/.hermes/scripts/common/research-gate.py approve {uuid}",
+            f'  mejorar        ... research-gate.py improve {uuid} --motivo "qué falta o qué está mal"',
+            f"  pasar a doc    ... research-gate.py present {uuid}   (después de aprobar)",
+            "",
+            "Esta card no la ejecuta ningún agente: la cierra tu decisión.",
+        ]
+    )
+
+
+def revisar(en_curso: Path, dry: bool) -> list[str]:
+    """Barrido 5: cuando el redactor cerró y el informe existe, abre el gate humano.
+
+    La card del redactor queda en `done`, que es terminal: la aprobación vive en una card
+    aparte que nace en `blocked` (el "pendiente" de la casa) y sólo la mueve una decisión
+    humana. Idempotente por `plan["gate"]`; la clave cambia por corrida para que una
+    corrección abra un gate nuevo en vez de colisionar con el anterior.
+    """
+    lineas = []
+    for carpeta in sorted(p for p in en_curso.iterdir() if p.is_dir()):
+        plan_path = carpeta / MARCA
+        if not plan_path.exists():
+            continue
+        try:
+            plan = json.loads(plan_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        redactor = plan.get("redactor")
+        if not redactor or plan.get("gate"):
+            continue
+        informe = carpeta / "deliverables" / "informe.md"
+        if not informe.exists():
+            continue
+        cards = {c.get("id"): c for c in _cards_del_tenant(carpeta.name)}
+        if (cards.get(redactor) or {}).get("status") not in ("done", "archived"):
+            continue
+        corridas = int(plan.get("redactor_corridas") or 1)
+        if dry:
+            lineas.append(f"ABRIRÍA el gate humano de {carpeta.name}")
+            continue
+        args = [
+            "create",
+            f"Gate humano: {carpeta.name}",
+            "--tenant",
+            carpeta.name,
+            "--idempotency-key",
+            f"{carpeta.name}-gate{corridas}",
+            "--parent",
+            str(plan.get("raiz") or ""),
+            "--body",
+            _cuerpo_del_gate(carpeta.name, carpeta, plan, informe),
+            "--initial-status",
+            "blocked",
+        ]
+        rc, out = _kanban(args)
+        if rc != 0:
+            lineas.append(f"GATE {carpeta.name}: kanban falló ({out.strip()[:80]})")
+            continue
+        m = re.search(r"t_[0-9A-Za-z]{6,}", out)
+        nueva = m.group(0) if m else ""
+        if nueva:
+            plan["gate"] = nueva
+            plan_path.write_text(
+                json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            lineas.append(f"GATE {carpeta.name}: card {nueva} esperando decisión")
+    return lineas
+
+
 def main(argv: list[str]) -> int:
     dry = "--dry-run" in argv
     cargar_variables_de_datos()  # el cron no pasa entorno: las rutas se leen del .env del home
@@ -819,6 +914,14 @@ def main(argv: list[str]) -> int:
     # ── barrido 4: el cierre del grafo ───────────────────────────────────────
     # Verificador cuando los ángulos cerraron y hay claims; redactor cuando hay veredictos.
     for linea in cerrar(en_curso, dry):
+        print(linea)
+        if linea.startswith("ERROR"):
+            fallos += 1
+
+    # ── barrido 5: el gate humano ────────────────────────────────────────────
+    # El redactor cerró y el informe existe: la investigación no está terminada hasta que
+    # una persona decida. La card nace en `blocked` y sólo la mueve `research-gate.py`.
+    for linea in revisar(en_curso, dry):
         print(linea)
         if linea.startswith("ERROR"):
             fallos += 1
