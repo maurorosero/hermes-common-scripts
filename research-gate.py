@@ -880,6 +880,24 @@ def verbo_archive(uuid: str, forzar: bool = False) -> int:
     return 0
 
 
+def _texto_libre(argv: list[str], bandera: str, minimo: int = 15) -> str:
+    """Todo lo que sigue a la bandera es el texto, aunque traiga comillas o saltos de linea.
+
+    Un motivo escrito a mano llega como varios argumentos: si se toma solo el siguiente, la
+    mitad se pierde en silencio y el redactor reescribe a ciegas creyendo que sabe que cambiar.
+    """
+    i = argv.index(bandera)
+    texto = " ".join(argv[i + 1 :]).strip()
+    texto = texto.strip("\"'`").strip()
+    if len(texto) < minimo:
+        raise SystemExit(
+            f"{bandera} necesita al menos {minimo} caracteres para que el redactor sepa que cambiar.\n"
+            f'  recibido: "{texto}"\n'
+            f'  ejemplo:  {bandera} "el informe no responde si el taller preexistente esta obligado"'
+        )
+    return texto
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         return verbo_panel()
@@ -898,12 +916,12 @@ def main(argv: list[str]) -> int:
         return 2
     uuid = argv[2]
     if verbo == "approve":
-        nota = argv[argv.index("--nota") + 1] if "--nota" in argv else None
+        nota = _texto_libre(argv, "--nota", minimo=3) if "--nota" in argv else None
         return verbo_approve(uuid, nota)
     if verbo == "improve":
         if "--motivo" not in argv:
             raise SystemExit("improve necesita --motivo")
-        return verbo_improve(uuid, argv[argv.index("--motivo") + 1])
+        return verbo_improve(uuid, _texto_libre(argv, "--motivo"))
     if verbo == "present":
         formato = argv[argv.index("--formato") + 1] if "--formato" in argv else None
         audiencia = (
