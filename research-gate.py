@@ -9,6 +9,7 @@ Tres decisiones, ninguna automatica:
     show     <uuid>                    el estado del gate, sin tocar nada
     assets   <uuid>                    el manifiesto contra el disco (--check)
     relaunch <uuid> [--barato]         la vuelve a encolar desde cero y archiva la muerta
+    archive  <uuid> [--forzar]         saca del tablero un intento que nunca entrego
     panel                              el tablero entero, por etapa (~/research)
     pending                            solo lo que espera una firma tuya
 
@@ -376,6 +377,7 @@ def _ficha(carpeta: Path) -> dict:
         "uuid": datos.get("uuid") or carpeta.name,
         "tema": (datos.get("tema") or "(sin tema)").strip(),
         "estado": datos.get("estado") or "?",
+        "listo_por": bool(datos.get("listo_por")),
         "salida": (datos.get("salida_expectada") or {}).get("formato") or "",
         "gate": plan.get("gate") or "",
         "redactor": plan.get("redactor") or "",
@@ -442,11 +444,9 @@ def verbo_panel(_uuid: str | None = None) -> int:
                 bloques["En presentacion"].append(f)
             elif f["gate"] and not f["tiene_gate"]:
                 bloques["Esperando tu decision"].append(f)
-            elif not f["redactor"]:
-                # Despachada pero sin card de redactor: el estado dice `processing` y la
-                # cadena no cerro. Sonaba a "corriendo" y no lo estaba.
-                bloques["Sin cerrar"].append(f)
             else:
+                # El panel dice la etapa, no si esta viva o muerta: desde el disco no se puede
+                # saber —una cadena que corre y una cortada se parecen— y adivinar es peor.
                 bloques["En curso"].append(f)
     if READY.exists():
         for carpeta in sorted(READY.iterdir()):
@@ -497,15 +497,13 @@ def verbo_panel(_uuid: str | None = None) -> int:
                 )
             elif titulo == "Aprobadas":
                 print(_linea(f, f"ready · /research present {f['uuid']}"))
-            elif titulo == "Sin cerrar":
-                print(
-                    _linea(f, "processing sin redactor - hay que relanzarla o cerrarla")
-                )
             elif titulo == "En curso":
-                if not f["despachada"]:
-                    quien = "sin despacho - la puerta no la tomo"
+                # El panel dice la etapa, no si esta viva o muerta: desde el disco no se puede
+                # saber —una cadena que corre y una cortada se parecen— y adivinar es peor.
+                if not f["listo_por"]:
+                    quien = "el prime la tiene"
                 elif not f["redactor"]:
-                    quien = "la cadena no cerro - sin card de redactor"
+                    quien = "angulos despachados, sin redactor todavia"
                 else:
                     quien = f"redactor {f['redactor']}"
                 print(_linea(f, quien))
@@ -612,7 +610,12 @@ def verbo_relaunch(uuid: str, barato: bool = False) -> int:
         if not card:
             continue
         rc, txt = _kanban("archive", str(card))
-        archivadas.append(f"{card} {'ok' if rc == 0 else txt.strip()[:80]}")
+        if rc == 0:
+            archivadas.append(str(card))
+        elif "no such task" in txt:
+            archivadas.append(f"{card} (ya no existia)")
+        else:
+            archivadas.append(f"{card} FALLO: {txt.strip()[:60]}")
     if archivadas:
         print("CARDS       " + " · ".join(archivadas))
 
@@ -626,6 +629,73 @@ def verbo_relaunch(uuid: str, barato: bool = False) -> int:
         "\n  la puerta lo toma en el proximo tick (5 min). Si queres cambiar algo del"
     )
     print(f"  pedido —motor, alcance— editalo ahora: {destino.name}")
+    return 0
+
+
+def _cards_del_intento(plan: dict) -> list[str]:
+    """Todas las cards que dejo un intento: la raiz, los angulos y las etapas del grafo."""
+    cards = [
+        plan.get("raiz"),
+        plan.get("verifier"),
+        plan.get("redactor"),
+        plan.get("gate"),
+    ]
+    cards += [a.get("card") for a in plan.get("angulos") or []]
+    vistos: list[str] = []
+    for c in cards:
+        if c and c not in vistos and str(c).startswith("t_"):
+            vistos.append(str(c))
+    return vistos
+
+
+def verbo_archive(uuid: str, forzar: bool = False) -> int:
+    """Saca del tablero un intento muerto: la carpeta a `_archive` y sus cards archivadas.
+
+    No es `discard`: `discard` seria una decision sobre un entregable que existe. Esto es
+    limpieza de lo que nunca llego a entregable — corridas de prueba, grafos cortados —, que si
+    se queda en `processing/` hace que el panel diga "sin cerrar" para siempre y tape lo vivo.
+
+    Se niega si hay algo que perder, salvo `--forzar`.
+    """
+    carpeta = _carpeta(uuid)
+    datos, _ = _leer(carpeta / "request.md")
+    try:
+        _, plan = _plan(carpeta)
+    except SystemExit:
+        plan = {}
+
+    if not forzar:
+        informes = (
+            sorted((carpeta / "deliverables").glob("*.md"))
+            if (carpeta / "deliverables").exists()
+            else []
+        )
+        if informes:
+            print(f"{uuid}: no la archivo — tiene entregable ({informes[0].name}).")
+            print("  si igual querés sacarla del tablero: --forzar")
+            return 1
+        if (carpeta / "validation" / "gate.json").exists() or plan.get("gate"):
+            print(f"{uuid}: no la archivo — hay una decision de gate en juego.")
+            return 1
+
+    archivadas = []
+    for card in _cards_del_intento(plan):
+        rc, txt = _kanban("archive", card)
+        if rc == 0:
+            archivadas.append(card)
+        elif "no such task" in txt:
+            archivadas.append(f"{card} (ya no existia)")
+        else:
+            archivadas.append(f"{card} FALLO: {txt.strip()[:60]}")
+    if archivadas:
+        print("CARDS     " + " · ".join(archivadas))
+
+    ARCHIVE.mkdir(parents=True, exist_ok=True)
+    movida = ARCHIVE / carpeta.name
+    if movida.exists():
+        movida = ARCHIVE / f"{carpeta.name}-{dt.datetime.now():%H%M%S}"
+    shutil.move(str(carpeta), str(movida))
+    print(f"ARCHIVADA {uuid} ({datos.get('estado')}) -> {movida}")
     return 0
 
 
@@ -665,6 +735,8 @@ def main(argv: list[str]) -> int:
         return verbo_assets(uuid)
     if verbo == "relaunch":
         return verbo_relaunch(uuid, "--barato" in argv)
+    if verbo == "archive":
+        return verbo_archive(uuid, "--forzar" in argv)
     print(__doc__)
     return 2
 
