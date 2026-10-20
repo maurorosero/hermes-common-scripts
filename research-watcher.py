@@ -6,7 +6,7 @@ Qué hace, en cinco barridos:
   BARRIDO 1 — la entrada (`requested/`):
     1. Barre `requested/*.md` (ignora PLANTILLA.md y README.md).
     2. Valida cada request con el esquema (research-validator.py).
-    3. Si es ilegible (sin frontmatter cerrado) → lo mueve a `_rechazados/` con el motivo.
+    3. Si es ilegible (sin frontmatter cerrado) → lo mueve a `_rejected/` con el motivo.
     4. Si es interpretable → crea `processing/<I-…>/`, deja ahí el request corregido
        (con sus `correcciones` y `faltantes`) y crea la card raíz para el orquestador.
     5. Sólo borra el archivo de la cola si la card se creó de verdad.
@@ -218,17 +218,17 @@ def procesar(
     dry: bool,
     cola: Path,
     en_curso: Path,
-    rechazados: Path,
+    rejected: Path,
 ) -> str | None:
     texto = archivo.read_text(encoding="utf-8")
     rep = validar(texto, esquema)
 
     if rep["fatal"]:
         if not dry:
-            rechazados.mkdir(parents=True, exist_ok=True)
-            destino = rechazados / archivo.name
+            rejected.mkdir(parents=True, exist_ok=True)
+            destino = rejected / archivo.name
             shutil.move(str(archivo), destino)
-            (rechazados / f"{archivo.name}.motivo.txt").write_text(
+            (rejected / f"{archivo.name}.motivo.txt").write_text(
                 rep["motivo"] + "\n", encoding="utf-8"
             )
         return f"RECHAZADO {archivo.name}: {rep['motivo']}"
@@ -876,8 +876,8 @@ def main(argv: list[str]) -> int:
     cargar_variables_de_datos()  # el cron no pasa entorno: las rutas se leen del .env del home
     cola = ruta_de("cola")
     en_curso = ruta_de("en_curso")
-    # los rechazados viven al lado de la cola: una variable menos que mantener
-    rechazados = cola / "_rechazados"
+    # los rechazados (`_rejected`) viven al lado de la cola: una variable menos que mantener
+    rejected = cola / "_rejected"
 
     esquema = cargar_esquema()
     fallos = 0
@@ -886,7 +886,7 @@ def main(argv: list[str]) -> int:
     if cola.exists():
         pendientes = [p for p in sorted(cola.glob("*.md")) if p.name not in IGNORAR]
         for archivo in pendientes:
-            linea = procesar(archivo, esquema, dry, cola, en_curso, rechazados)
+            linea = procesar(archivo, esquema, dry, cola, en_curso, rejected)
             if linea is None:  # ya avisado en un barrido anterior
                 continue
             print(linea)
