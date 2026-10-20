@@ -179,9 +179,11 @@ def recuperado(url: str, entradas: list[dict]) -> list[tuple[str, str]]:
             continue
         if entrada["file"].endswith((".html", ".htm")):
             contenido = _sin_scripts(contenido)
-        copias.append(
-            (contenido, f"caché de extracción ({entrada.get('origen') or 'home'})")
+        origen = entrada.get("origen") or "home"
+        etiqueta = (
+            "evidencia local" if origen == "evidencia local" else f"caché ({origen})"
         )
+        copias.append((contenido, etiqueta))
     _MEMO[limpia] = copias
     return copias
 
