@@ -450,70 +450,72 @@ def _linea(f: dict, extra: str = "") -> str:
 
 
 def verbo_pending(_uuid: str | None = None) -> int:
-    """Solo lo que espera una firma tuya. Es la vista que se consulta a diario."""
+    """Solo lo que espera tu firma, con las palabras de todos los dias."""
     esperando: list[dict] = []
     if PROCESSING.exists():
-        for carpeta in sorted(PROCESSING.iterdir()):
-            if carpeta.is_dir() and (carpeta / "request.md").exists():
-                try:
-                    f = _ficha(carpeta)
-                except SystemExit:
-                    continue
-                if f["gate"] and not f["tiene_gate"]:
-                    esperando.append(f)
+        for carpeta in sorted(p for p in PROCESSING.iterdir() if p.is_dir()):
+            if not (carpeta / "request.md").exists():
+                continue
+            try:
+                f = _ficha(carpeta)
+            except SystemExit:
+                continue
+            if f["gate"] and not f["tiene_gate"]:
+                esperando.append(f)
     if not esperando:
-        print("Nada espera tu decision.")
+        print("Nada espera tu decisión.")
         return 0
-    print(f"Esperando tu decision: {len(esperando)}\n")
-    for f in esperando:
+    print(
+        f"{len(esperando)} informe{'s' if len(esperando) > 1 else ''} listo{'s' if len(esperando) > 1 else ''} para revisar\n"
+    )
+    for n, f in enumerate(esperando, 1):
+        print(f"{n}) {f['tema']}")
         incompletos = _assets_incompletos(f["carpeta"])
-        aviso = ""
         if incompletos:
-            aviso = (
-                f" · {len(incompletos)} asset(s) incompletos: approve sale con avisos"
+            print(
+                f"   Ojo: faltan {len(incompletos)} recurso(s), aprobarlo sale con avisos."
             )
-        print(_linea(f, _para_revisar(f["carpeta"]) + aviso))
-        print(f"              ver     /research show {f['uuid']}")
-        print(f"              firmar  /research approve {f['uuid']}")
-        print(f'              cambiar /research improve {f["uuid"]} --motivo "..."')
+        print(f"     verlo           /research show {f['uuid']}")
+        print(f"     aprobarlo       /research approve {f['uuid']}")
+        print(f'     pedir cambios   /research improve {f["uuid"]} --motivo "..."')
         print()
     return 0
 
 
 def verbo_panel(_uuid: str | None = None) -> int:
-    """El tablero entero de research, por etapa. Sin modelo: lee disco y nada mas."""
-    bloques: dict[str, list[dict]] = {
-        "Esperando tu decision": [],
-        "En curso": [],
-        "Sin cerrar": [],
-        "En presentacion": [],
-        "Aprobadas": [],
-        "En cola": [],
-    }
+    """El tablero, escrito para que se entienda que hay que hacer y nada mas.
+
+    Sin ids de cards, sin nombres de etapa y sin jerga del contrato: lo que espera una decision
+    se cuenta como una tarea ("el informe esta listo, aprobalo o pedi cambios"), y lo que avanza
+    solo se resume en una linea para no tapar lo que si requiere a alguien.
+    """
+    deciden: list[dict] = []
+    trabajan: list[dict] = []
+    atascadas: list[dict] = []
+    listas: list[dict] = []
+    en_cola: list[dict] = []
+
     if PROCESSING.exists():
-        for carpeta in sorted(PROCESSING.iterdir()):
-            if not (carpeta.is_dir() and (carpeta / "request.md").exists()):
+        for carpeta in sorted(p for p in PROCESSING.iterdir() if p.is_dir()):
+            if not (carpeta / "request.md").exists():
                 continue
             try:
                 f = _ficha(carpeta)
             except SystemExit:
                 continue
             if f["estado"] == "waiting":
-                bloques["En presentacion"].append(f)
+                atascadas.append(f)
             elif f["gate"] and not f["tiene_gate"]:
-                bloques["Esperando tu decision"].append(f)
+                deciden.append(f)
             else:
-                # El panel dice la etapa, no si esta viva o muerta: desde el disco no se puede
-                # saber —una cadena que corre y una cortada se parecen— y adivinar es peor.
-                bloques["En curso"].append(f)
+                trabajan.append(f)
     if READY.exists():
-        for carpeta in sorted(READY.iterdir()):
-            if carpeta.is_dir() and (carpeta / "request.md").exists():
+        for carpeta in sorted(p for p in READY.iterdir() if p.is_dir()):
+            if (carpeta / "request.md").exists():
                 try:
-                    f = _ficha(carpeta)
+                    listas.append(_ficha(carpeta))
                 except SystemExit:
                     continue
-                bloques["Aprobadas"].append(f)
     if REQUESTED.exists():
         for archivo in sorted(REQUESTED.glob("*.md")):
             if archivo.name in ("PLANTILLA.md",) or archivo.name.startswith("_"):
@@ -522,62 +524,72 @@ def verbo_panel(_uuid: str | None = None) -> int:
                 datos, _ = _leer(archivo)
             except SystemExit:
                 continue
-            bloques["En cola"].append(
+            en_cola.append(
                 {
                     "uuid": datos.get("uuid") or archivo.stem,
                     "tema": (datos.get("tema") or "(sin tema)").strip(),
-                    "estado": "requested",
-                    "salida": "",
-                    "gate": "",
-                    "redactor": "",
-                    "tiene_gate": False,
-                    "carpeta": archivo,
                 }
             )
-    total = sum(len(v) for v in bloques.values())
-    print(f"RESEARCH · {total} en el tablero\n")
+
+    total = len(deciden) + len(trabajan) + len(atascadas) + len(listas) + len(en_cola)
     if not total:
-        print("Nada. Un pedido se deja en la cola y la puerta lo clasifica.")
+        print("No hay ninguna investigación en marcha.")
         return 0
-    for titulo, filas in bloques.items():
-        if not filas:
-            continue
-        print(f"{titulo} ({len(filas)})")
-        for f in filas:
-            if titulo == "Esperando tu decision":
-                print(_linea(f, _para_revisar(f["carpeta"])))
-                print(f"              ver     /research show {f['uuid']}")
-                print(f"              firmar  /research approve {f['uuid']}")
-                print(
-                    f'              cambiar /research improve {f["uuid"]} --motivo "..."'
-                )
-                print(
-                    f"              mandar  /research present {f['uuid']} --formato docx"
-                )
-            elif titulo == "En presentacion":
-                print(_linea(f, _espera_presenter(f["carpeta"], f["uuid"])))
-            elif titulo == "Aprobadas":
-                print(_linea(f, f"ready · /research present {f['uuid']}"))
-            elif titulo == "En curso":
-                # El panel dice la etapa, no si esta viva o muerta: desde el disco no se puede
-                # saber —una cadena que corre y una cortada se parecen— y adivinar es peor.
-                if not f["listo_por"]:
-                    quien = "el prime la tiene"
-                elif not f["redactor"]:
-                    quien = "angulos despachados, sin redactor todavia"
-                else:
-                    quien = f"redactor {f['redactor']}"
-                print(_linea(f, quien))
-            else:
-                print(_linea(f))
+    print(
+        f"RESEARCH — {total} "
+        + ("investigación" if total == 1 else "investigaciones")
+        + "\n"
+    )
+
+    n = 0
+    for f in deciden:
+        n += 1
+        print(f"{n}) {f['tema']}")
+        print("   El informe está listo y espera que lo apruebes.")
+        print(f"     verlo           /research show {f['uuid']}")
+        print(f"     aprobarlo       /research approve {f['uuid']}")
+        print(f'     pedir cambios   /research improve {f["uuid"]} --motivo "..."')
+        print(f"     a documento     /research present {f['uuid']} --formato docx")
         print()
-    esperando = len(bloques["Esperando tu decision"])
-    if esperando == 1:
-        print("Siguiente paso: 1 informe espera tu firma.")
-    elif esperando > 1:
-        print(f"Siguiente paso: {esperando} informes esperan tu firma.")
+
+    for f in atascadas:
+        n += 1
+        print(f"{n}) {f['tema']}")
+        print("   La aprobaste, pero falta el pedido del documento y sin él no avanza.")
+        print(f"     rearmarlo       /research present {f['uuid']}")
+        print()
+
+    for f in listas:
+        n += 1
+        print(f"{n}) {f['tema']}")
+        print("   Aprobada. Si la querés como documento:")
+        print(f"     pasarla         /research present {f['uuid']} --formato docx")
+        print()
+
+    def _plural(n: int, uno: str, varios: str) -> str:
+        return uno if n == 1 else varios
+
+    if deciden or atascadas or listas:
+        if trabajan:
+            quien = _plural(
+                len(trabajan), "sigue trabajando sola", "siguen trabajando solas"
+            )
+            print(f"Además, {len(trabajan)} {quien} — no tenés que hacer nada.")
+        if en_cola:
+            quien = _plural(len(en_cola), "espera", "esperan")
+            print(f"Y {len(en_cola)} {quien} que la puerta la tome.")
     else:
-        print("Siguiente paso: nada espera tu firma.")
+        if trabajan:
+            quien = _plural(
+                len(trabajan), "investigación trabajando", "investigaciones trabajando"
+            )
+            print(f"{len(trabajan)} {quien} — no tenés que hacer nada.")
+        if en_cola:
+            quien = _plural(
+                len(en_cola), "en la cola, esperando", "en la cola, esperando"
+            )
+            print(f"{len(en_cola)} {quien} que la puerta la tome.")
+        print("\nNada espera tu decisión.")
     return 0
 
 
