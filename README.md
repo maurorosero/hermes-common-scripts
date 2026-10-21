@@ -59,7 +59,7 @@ y hay que reinstalarlo en cada clon.
 | Script | Qué hace |
 |---|---|
 | `render-asset.py` | Produce los assets de una investigación desde `assets/manifiesto.yaml`. La spec es dato y el render es código: una gráfica o un diagrama no consume tokens ni puede inventar una cifra, porque los números salen de un claim. `--check` valida que cada asset esté atado a un claim existente y referenciado en el informe. Lo que sólo adorna (ilustración) no se produce acá: lo pide el manifiesto y lo hace el presenter. |
-| `research-gate.py` | El gate humano del flujo. `approve <uuid>` cierra la card de gate y deja el estado en `ready`; `improve <uuid> --motivo "..."` devuelve el trabajo en una card nueva con el motivo adentro; `present <uuid>` escribe el brief del documento en la cola del presenter y deja el estado en `waiting`; `show <uuid>` informa sin tocar nada. Los tres verbos exigen que el estado venga del gate: nada se aprueba por fuera. |
+| `research-gate.py` | El gate humano del flujo. `approve <uuid>` cierra la card de gate y deja el estado en `ready` (carpeta en `ready/`, que es área de tránsito: el humano la deja o la mueve, la investigación ya cerró); `improve <uuid> --motivo "..."` devuelve el trabajo en una card nueva con el motivo adentro; `present <uuid>` escribe el brief del documento en la cola del presenter y deja el estado en `waiting`; `show <uuid>` informa sin tocar nada. Los tres verbos exigen que el estado venga del gate: nada se aprueba por fuera. |
 
 ## Gate de secretos
 

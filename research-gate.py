@@ -291,7 +291,8 @@ def _va_a_documento(datos: dict, destino: str | None) -> bool:
 def verbo_approve(uuid: str, nota: str | None, destino: str | None = None) -> int:
     """Cierra el gate humano: la investigacion termina en `ready`, o queda en `waiting`.
 
-    `ready` es donde muere el research. `waiting` es la decision humana de que falta un
+    `ready` es donde muere el research. La carpeta de `ready/` es un area de transito: una vez
+    cerrada la investigacion, el humano la deja ahi o la mueve a donde le convenga. `waiting` es la decision humana de que falta un
     documento para darla por completa; la escribe este verbo, no un barrido.
     """
     carpeta = _carpeta(uuid)
@@ -806,7 +807,11 @@ def verbo_panel(_uuid: str | None = None) -> int:
             )
             print(f"   {_documento(f['carpeta'], f['uuid'])}")
         elif tipo == "aprobada":
-            print("   Terminada y aprobada: acá muere el research.")
+            print(
+                "   Terminada y aprobada: acá muere el research."
+                "\n   La carpeta queda en ready/, que es un área de tránsito: podés dejarla"
+                " o llevarla donde quieras."
+            )
             print(
                 f"   si querés un documento, es un pedido aparte: /research present {f['uuid']}"
             )
