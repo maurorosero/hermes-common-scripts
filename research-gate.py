@@ -183,8 +183,30 @@ def _assets_incompletos(carpeta: Path) -> list[str]:
     ]
 
 
+def _especificacion_del_redactor(carpeta: Path) -> object:
+    """Lo que el redactor especifico para el presenter, si lo hizo.
+
+    El reparto es: la fuente o el prime declaran, el redactor especifica con el material ya
+    verificado, el presenter produce. Lo que manda es esto.
+    """
+    import yaml
+
+    ruta = carpeta / "deliverables" / "especificacion-presenter.yaml"
+    if not ruta.exists():
+        return None
+    try:
+        return yaml.safe_load(ruta.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return {"error": f"no se pudo leer {ruta.name}"}
+
+
 def _brief(
-    carpeta: Path, datos: dict, formato: str | None, audiencia: str | None, salida: Path
+    carpeta: Path,
+    datos: dict,
+    formato: str | None,
+    audiencia: str | None,
+    salida: Path,
+    especificada: object = None,
 ) -> dict:
     salida_expectada = datos.get("salida_expectada") or {}
     return {
@@ -195,9 +217,11 @@ def _brief(
         "formato": formato,
         "audiencia": audiencia,
         "marca": datos.get("marca"),
-        # Insumo para el presenter tal como lo definio el pedido. El research no lo interpreta
-        # ni lo decide: lo unico que le importa es que haga falta un documento.
-        "especificacion_presentacion": datos.get("especificacion_presentacion"),
+        # Dos cosas distintas: lo que declaro la fuente (usuario o prime) y lo que el redactor
+        # perfecciono con el material en mano. El presenter obedece la segunda; la primera es
+        # el punto de partida y queda a la vista para poder comparar.
+        "especificacion_declarada": datos.get("especificacion_presentacion"),
+        "especificacion_especificada": especificada,
         "destino_post_investigacion": datos.get("destino_post_investigacion"),
         "insumos": {
             "informe": str(carpeta / "deliverables" / "informe.md"),
@@ -435,7 +459,13 @@ def verbo_present(uuid: str, formato: str | None, audiencia: str | None) -> int:
         salida = carpeta / "deliverables" / f"{slug}.{formato}"
     else:
         salida = carpeta / "deliverables"
-    brief = _brief(carpeta, datos, formato, audiencia, salida)
+    especificada = _especificacion_del_redactor(carpeta)
+    if datos.get("especificacion_presentacion") and not especificada:
+        print(
+            "  OJO: el pedido declara una presentación pero el redactor no la especificó:\n"
+            "  el presenter va a recibir sólo el punto de partida."
+        )
+    brief = _brief(carpeta, datos, formato, audiencia, salida, especificada)
 
     import yaml
 

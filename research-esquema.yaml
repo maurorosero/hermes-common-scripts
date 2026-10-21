@@ -237,8 +237,10 @@ campos:
     tipo: texto
     obligatorio: false
     descripcion: >
-      Insumo para el presenter definido desde el pedido: normas de presentacion, tipo de pieza,
-      publico. El research lo transporta tal cual y no lo interpreta.
+      Tipo de documento y normas de presentacion, declarados por la fuente o por el prime en el
+      pedido. Es el punto de partida, no el contrato final: el redactor lo perfecciona en
+      deliverables/especificacion-presenter.yaml con el material ya verificado, y eso es lo que
+      el presenter obedece. El research no lo interpreta.
 
   correcciones:
     tipo: lista

@@ -671,6 +671,19 @@ def _cuerpo_del_verificador(
     return "\n".join(lineas)
 
 
+def _pide_presentacion(carpeta: Path) -> bool:
+    """Si el pedido declara que el resultado tiene que pasar por el presenter."""
+    datos = frontmatter_de(carpeta / "request.md")
+    if not datos:
+        return False
+    if (
+        str(datos.get("destino_post_investigacion") or "").strip().casefold()
+        == "documento"
+    ):
+        return True
+    return bool(str(datos.get("especificacion_presentacion") or "").strip())
+
+
 def _cuerpo_del_redactor(uuid: str, carpeta: Path, plan: dict) -> str:
     return "\n".join(
         [
@@ -682,6 +695,12 @@ def _cuerpo_del_redactor(uuid: str, carpeta: Path, plan: dict) -> str:
             f"  veredictos:{carpeta / 'validation' / 'verdicts.json'}",
             f"  request:   {carpeta / 'request.md'}",
             f"  tu salida: {carpeta / 'deliverables' / 'informe.md'}",
+            (
+                f"  spec presenter: {carpeta / 'deliverables' / 'especificacion-presenter.yaml'}"
+                "  (el pedido pide presentación: perfeccioná sus instrucciones)"
+                if _pide_presentacion(carpeta)
+                else ""
+            ),
             "",
             "Cargá el skill `redactor-documento` y seguí su procedimiento.",
             "",
