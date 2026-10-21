@@ -226,11 +226,19 @@ campos:
     obligatorio: true
     dominio: [archivar_wiki, insumo_propuesta, entregar_tercero, informar_decision, dejar_en_entregas, documento]
     descripcion: >
-      Que hacer con el resultado al terminar. `documento` significa que la investigacion no
-      esta completa hasta que exista un entregable presentado: el gate humano la deja en
-      `waiting` en vez de `ready`.
+      Que hacer con el resultado al terminar. `documento` significa una sola cosa para el
+      research: la investigacion no esta completa hasta que el resultado pase por el presenter,
+      asi que el gate humano la deja en `waiting` en vez de `ready`. El tipo de documento, el
+      formato y el publico no son asunto del research: van en `especificacion_presentacion`.
 
   # ---- Campos escritos por las puertas, no por la fuente ----
+
+  especificacion_presentacion:
+    tipo: texto
+    obligatorio: false
+    descripcion: >
+      Insumo para el presenter definido desde el pedido: normas de presentacion, tipo de pieza,
+      publico. El research lo transporta tal cual y no lo interpreta.
 
   correcciones:
     tipo: lista

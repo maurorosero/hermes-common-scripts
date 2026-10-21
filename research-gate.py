@@ -184,7 +184,7 @@ def _assets_incompletos(carpeta: Path) -> list[str]:
 
 
 def _brief(
-    carpeta: Path, datos: dict, formato: str, audiencia: str, salida: Path
+    carpeta: Path, datos: dict, formato: str | None, audiencia: str | None, salida: Path
 ) -> dict:
     salida_expectada = datos.get("salida_expectada") or {}
     return {
@@ -195,6 +195,9 @@ def _brief(
         "formato": formato,
         "audiencia": audiencia,
         "marca": datos.get("marca"),
+        # Insumo para el presenter tal como lo definio el pedido. El research no lo interpreta
+        # ni lo decide: lo unico que le importa es que haga falta un documento.
+        "especificacion_presentacion": datos.get("especificacion_presentacion"),
         "destino_post_investigacion": datos.get("destino_post_investigacion"),
         "insumos": {
             "informe": str(carpeta / "deliverables" / "informe.md"),
@@ -409,8 +412,10 @@ def verbo_present(uuid: str, formato: str | None, audiencia: str | None) -> int:
             f"  una aprobada vive en ready/: revisá esto antes de presentarla."
         )
     salida_expectada = datos.get("salida_expectada") or {}
-    formato = formato or salida_expectada.get("formato") or "md"
-    audiencia = audiencia or salida_expectada.get("audiencia") or "interno"
+    # El tipo de documento no es asunto del research: si alguien lo pide explicito, viaja como
+    # instruccion suya; si no, el brief lo deja abierto para que lo decida el presenter.
+    formato = formato or None
+    audiencia = audiencia or None
 
     incompletos = _assets_incompletos(carpeta)
     if incompletos:
@@ -419,12 +424,17 @@ def verbo_present(uuid: str, formato: str | None, audiencia: str | None) -> int:
             print(f"  - {p}")
         return 1
 
-    slug = (
-        "informe"
-        if formato == "md"
-        else str(salida_expectada.get("tipo") or "documento")
-    )
-    salida = carpeta / "deliverables" / f"{slug}.{formato}"
+    # Sin formato pedido, el research no inventa extension: el archivo lo nombra el presenter
+    # dentro de deliverables/.
+    if formato:
+        slug = (
+            "informe"
+            if formato == "md"
+            else str(salida_expectada.get("tipo") or "documento")
+        )
+        salida = carpeta / "deliverables" / f"{slug}.{formato}"
+    else:
+        salida = carpeta / "deliverables"
     brief = _brief(carpeta, datos, formato, audiencia, salida)
 
     import yaml
@@ -768,8 +778,7 @@ def verbo_panel(_uuid: str | None = None) -> int:
         elif tipo == "aprobada":
             print("   Terminada y aprobada: acá muere el research.")
             print(
-                f"   si querés un documento, es un pedido aparte: "
-                f"/research present {f['uuid']} --formato docx"
+                f"   si querés un documento, es un pedido aparte: /research present {f['uuid']}"
             )
         elif tipo == "trabaja":
             print("   Está trabajando sola ahora mismo. No tenés que hacer nada.")
