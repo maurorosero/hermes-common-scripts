@@ -755,17 +755,21 @@ def verbo_relaunch(uuid: str, barato: bool = False) -> int:
         )
         print("  para rehacerlo sobre lo investigado: /research improve", uuid)
         return 1
-    if (carpeta / "validation" / "gate.json").exists():
-        print(f"{uuid}: no la relanzo — hay una decision registrada en el gate.")
+    firma = _firma_esperando(uuid)
+    if firma:
+        print(f"{uuid}: no la relanzo — hay una firma esperando tu decisión ({firma}).")
         return 1
     try:
         _, plan = _plan(carpeta)
     except SystemExit:
         plan = {}
-    if plan.get("gate"):
-        print(
-            f"{uuid}: no la relanzo — la card de gate {plan['gate']} espera tu decision."
-        )
+    # `plan["gate"]` guarda la ultima card de gate, y puede estar cerrada: lo que bloquea es una
+    # firma esperando, y eso ya se comprobo arriba mirando el tablero. Un intento devuelto con
+    # cambios se puede relanzar.
+    vivas = _cards_vivas(plan)
+    if vivas:
+        print(f"{uuid}: no la relanzo — la cadena sigue viva: {', '.join(vivas)}.")
+        print("  relanzar ahora corta el trabajo en curso.")
         return 1
 
     nuevo = {k: datos[k] for k in _CAMPOS_QUE_VIAJAN if k in datos}
@@ -829,6 +833,67 @@ def _cards_del_intento(plan: dict) -> list[str]:
     return vistos
 
 
+def _cards_vivas(plan: dict) -> list[str]:
+    """Cards de la cadena que todavia estan trabajando.
+
+    `running`, `ready` y `review` son trabajo en curso: archivarlas mata el worker y pierde la
+    corrida. Un intento muerto tiene todas sus cards cerradas, y esa es la unica diferencia que
+    importa antes de archivar.
+    """
+    ids = [
+        v
+        for k, v in plan.items()
+        if k in ("raiz", "verifier", "redactor", "gate") and v
+    ]
+    ids += [a.get("card") for a in plan.get("angulos") or [] if a.get("card")]
+    if not ids:
+        return []
+    base = Path(os.environ.get("HERMES_HOME") or (HOME / ".hermes"))
+    db = base / "kanban" / "boards" / BOARD / "kanban.db"
+    if not db.exists():
+        return []
+    vivas: list[str] = []
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            for card in ids:
+                fila = con.execute(
+                    "SELECT status FROM tasks WHERE id = ?", (card,)
+                ).fetchone()
+                if fila and fila[0] in ("running", "ready", "review"):
+                    vivas.append(f"{card} ({fila[0]})")
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return []
+    return vivas
+
+
+def _firma_esperando(uuid: str) -> str:
+    """La card de gate abierta esperando firma, si la hay.
+
+    Se mira el tablero y no `gate.json`: ese archivo guarda tambien las decisiones ya tomadas, y
+    una investigacion devuelta con cambios no es una decision pendiente.
+    """
+    base = Path(os.environ.get("HERMES_HOME") or (HOME / ".hermes"))
+    db = base / "kanban" / "boards" / BOARD / "kanban.db"
+    if not db.exists():
+        return ""
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            fila = con.execute(
+                "SELECT id FROM tasks WHERE title = ? AND status = 'blocked' "
+                "ORDER BY rowid DESC LIMIT 1",
+                (f"Gate humano: {uuid}",),
+            ).fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return ""
+    return fila[0] if fila else ""
+
+
 def verbo_archive(uuid: str, forzar: bool = False) -> int:
     """Saca del tablero un intento muerto: la carpeta a `_archive` y sus cards archivadas.
 
@@ -855,8 +920,18 @@ def verbo_archive(uuid: str, forzar: bool = False) -> int:
             print(f"{uuid}: no la archivo — tiene entregable ({informes[0].name}).")
             print("  si igual querés sacarla del tablero: --forzar")
             return 1
-        if (carpeta / "validation" / "gate.json").exists() or plan.get("gate"):
-            print(f"{uuid}: no la archivo — hay una decision de gate en juego.")
+        vivas = _cards_vivas(plan)
+        if vivas:
+            print(f"{uuid}: no la archivo — la cadena sigue viva: {', '.join(vivas)}.")
+            print(
+                "  archivarla ahora mata el trabajo en curso; si igual querés: --forzar"
+            )
+            return 1
+        firma = _firma_esperando(uuid)
+        if firma:
+            print(
+                f"{uuid}: no la archivo — hay una firma esperando tu decisión ({firma})."
+            )
             return 1
 
     archivadas = []

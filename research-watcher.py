@@ -631,28 +631,44 @@ def verificar_citas(en_curso: Path, dry: bool) -> list[str]:
     return lineas
 
 
-def _cuerpo_del_verificador(uuid: str, carpeta: Path, plan: dict) -> str:
-    return "\n".join(
-        [
-            f"Investigación {uuid}: los ángulos terminaron y la verificación de citas ya corrió.",
+def _cuerpo_del_verificador(
+    uuid: str, carpeta: Path, plan: dict, pendientes: list[str] | None = None
+) -> str:
+    lineas = [
+        f"Investigación {uuid}: los ángulos terminaron y la verificación de citas ya corrió.",
+        "",
+        "Rutas ya resueltas — no las busques ni las compongas:",
+        f"  claims:    {carpeta / 'validation' / 'claims.json'}",
+        f"  fichas:    {carpeta / 'sources'}",
+        f"  tu salida: {carpeta / 'validation' / 'verdicts.json'}",
+        "",
+        "Cargá el skill `researcher-verifier` y seguí su procedimiento.",
+        "",
+    ]
+    if pendientes:
+        # Re-verificación: entró material nuevo y sólo eso falta juzgar. Rejuzgar los que ya
+        # tienen veredicto es pagar dos veces por la misma respuesta.
+        lineas += [
+            "Esto es una **re-verificación**: el veredicto anterior ya cubre el resto.",
+            f"Juzgá **sólo** estos {len(pendientes)} claims, que son los que no tienen veredicto:",
+            "  " + ", ".join(pendientes),
+            "Copiá los veredictos que ya existen en `verdicts.json` tal cual y agregá los nuevos.",
             "",
-            "Rutas ya resueltas — no las busques ni las compongas:",
-            f"  claims:    {carpeta / 'validation' / 'claims.json'}",
-            f"  fichas:    {carpeta / 'sources'}",
-            f"  tu salida: {carpeta / 'validation' / 'verdicts.json'}",
-            "",
-            "Cargá el skill `researcher-verifier` y seguí su procedimiento.",
-            "",
+        ]
+    else:
+        lineas += [
             "En corto: leé `claims.json` una vez, juzgá **sólo** los claims con",
             "`requiere_juicio: true`, y escribí `verdicts.json` una sola vez con un registro",
             'por claim. Los que ya traen `claim_status: "unverified"` están resueltos por el',
             "verificador de citas: se copian, no se rejuzgan.",
             "",
-            "La evidencia de cada claim ya está en disco y su ruta viaja en el campo",
-            "`evidencia`. Abrí ese archivo; no hagas un fetch si alcanza. No busques fuentes",
-            "nuevas: no es tu oficio y no hay tiempo para eso.",
         ]
-    )
+    lineas += [
+        "La evidencia de cada claim ya está en disco y su ruta viaja en el campo",
+        "`evidencia`. Abrí ese archivo; no hagas un fetch si alcanza. No busques fuentes",
+        "nuevas: no es tu oficio y no hay tiempo para eso.",
+    ]
+    return "\n".join(lineas)
 
 
 def _cuerpo_del_redactor(uuid: str, carpeta: Path, plan: dict) -> str:
@@ -674,6 +690,32 @@ def _cuerpo_del_redactor(uuid: str, carpeta: Path, plan: dict) -> str:
             "`unverified` o `contradicted` no se afirma, se declara en la sección de límites.",
         ]
     )
+
+
+def _claims_sin_veredicto(claims: Path, verdicts: Path) -> list[str]:
+    """Ids de claims que ningun veredicto cubre todavia.
+
+    Cuando entra material nuevo despues del pase del verificador, esos claims quedan sin juicio
+    y el redactor los escribe como si no existieran. Esta lista es exactamente lo que hay que
+    volver a juzgar, y nada mas.
+    """
+    try:
+        datos = json.loads(claims.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    lista = datos.get("claims") if isinstance(datos, dict) else datos
+    ids = [c.get("id") for c in (lista or []) if c.get("id")]
+    if not ids:
+        return []
+    cubiertos: set[str] = set()
+    if verdicts.exists():
+        try:
+            v = json.loads(verdicts.read_text(encoding="utf-8"))
+            juzgados = v.get("veredictos") if isinstance(v, dict) else v
+            cubiertos = {x.get("id") for x in (juzgados or []) if x.get("id")}
+        except (OSError, json.JSONDecodeError):
+            cubiertos = set()
+    return [i for i in ids if i not in cubiertos]
 
 
 def cerrar(en_curso: Path, dry: bool) -> list[str]:
@@ -714,26 +756,46 @@ def cerrar(en_curso: Path, dry: bool) -> list[str]:
         )
 
         # ── etapa A: el verificador ──────────────────────────────────────────
-        if not plan.get("verifier") and angulos_ok and claims.exists():
+        pendientes = _claims_sin_veredicto(claims, verdicts) if claims.exists() else []
+        # Re-verificar cuando entro material nuevo: si `claims.json` es mas nuevo que
+        # `verdicts.json` hay claims sin juicio. Sin esto, agregar hallazgos despues del pase
+        # dejaba esos claims sin veredicto para siempre y el redactor los marcaba como humo.
+        reverificar = bool(
+            plan.get("verifier")
+            and plan.get("verifier") != "omitido"
+            and pendientes
+            and claims.exists()
+            and claims.stat().st_mtime
+            > (verdicts.stat().st_mtime if verdicts.exists() else 0.0)
+            and cards.get(plan.get("verifier") or "") in cerradas
+        )
+        if (not plan.get("verifier") and angulos_ok and claims.exists()) or reverificar:
             if not verificar:
                 plan["verifier"] = "omitido"  # el pedido no pedía verificación
                 lineas.append(f"VERIFICACIÓN OMITIDA {uuid}: el request no la pedía")
             elif dry:
-                lineas.append(f"CREARÍA verificador {uuid}")
+                lineas.append(
+                    f"CREARÍA verificador {uuid}"
+                    + (" (re-verificación)" if reverificar else "")
+                )
             else:
+                corridas = int(plan.get("verifier_corridas") or 1)
                 args = [
                     "create",
-                    f"Verificar: {uuid}",
+                    f"Verificar: {uuid}"
+                    + (f" (re-verificación v{corridas})" if reverificar else ""),
                     "--assignee",
                     "researcher-verifier",
                     "--tenant",
                     uuid,
                     "--idempotency-key",
-                    f"{uuid}-v",
+                    f"{uuid}-v{corridas}",
                     "--skill",
                     "researcher-verifier",
                     "--body",
-                    _cuerpo_del_verificador(uuid, carpeta, plan),
+                    _cuerpo_del_verificador(
+                        uuid, carpeta, plan, pendientes if reverificar else None
+                    ),
                 ]
                 if plan.get("raiz"):
                     args += ["--parent", plan["raiz"]]
@@ -743,8 +805,11 @@ def cerrar(en_curso: Path, dry: bool) -> list[str]:
                     continue
                 m = re.search(r"(t_[A-Za-z0-9]+)", txt)
                 plan["verifier"] = m.group(1) if m else ""
+                plan["verifier_corridas"] = corridas + 1
                 lineas.append(
-                    f"DESPACHADO verificador {uuid} → {plan['verifier'] or '(sin id)'}"
+                    f"DESPACHADO verificador {uuid}"
+                    + (" (re-verificación)" if reverificar else "")
+                    + f" → {plan['verifier'] or '(sin id)'}"
                 )
 
         # ── etapa B: el redactor ─────────────────────────────────────────────
