@@ -3,9 +3,10 @@
 
 Tres decisiones, ninguna automatica:
 
-    approve  <uuid>                    aprueba el informe  -> estado `ready`
-    improve  <uuid> --motivo "..."     no aprobado: vuelve al redactor con el motivo
-    present  <uuid> [--formato X]      lo manda al presenter -> estado `waiting`
+    approve  <uuid> [--a documento]     firma el informe: termina en `ready`, o en `waiting`
+                                        si el resultado tiene que pasar por el presenter
+    improve  <uuid> --motivo "..."      no aprobado: vuelve al redactor con el motivo
+    present  <uuid>                     marca que hace falta un documento -> `waiting`
     show     <uuid>                    el estado del gate, sin tocar nada
     assets   <uuid>                    el manifiesto contra el disco (--check)
     relaunch <uuid> [--barato]         la vuelve a encolar desde cero y archiva la muerta
@@ -17,8 +18,9 @@ Convencion copiada de `andrea-ai-project`: la card del gate nace en `blocked` (e
 "pendiente"), que es sticky — nada la toca hasta que el humano decide — y los gates operan
 **sobre kanban**, con `request.md` espejando la decision. El estado no se cambia por fuera.
 
-`done` es terminal, asi que la aprobacion no puede vivir en la card del redactor: vive en una
-card de gate aparte, creada por el barrido 5 cuando el trabajo termino.
+`done` es terminal **como estado de card**, asi que la aprobacion no puede vivir en la card del
+redactor: vive en una card de gate aparte, creada por el barrido 5 cuando el trabajo termino.
+El research, como proceso, termina en `ready`; `waiting` es la marca de que falta el documento.
 
 `present` exige que los assets de research esten completos: un informe que declara recursos en
 `assets/manifiesto.yaml` y no los referencia no sale a presentacion.
@@ -687,7 +689,7 @@ def _documento(carpeta: Path, uuid: str) -> str:
             "Le pediste el documento pero el pedido se perdió: si todavía lo querés, "
             f"/research present {uuid}"
         )
-    return f"Si querés el documento armado: /research present {uuid} --formato docx"
+    return f"Si querés el documento armado: /research present {uuid}"
 
 
 def verbo_pending(_uuid: str | None = None) -> int:
@@ -794,9 +796,7 @@ def verbo_panel(_uuid: str | None = None) -> int:
             print(
                 f'     pedirle cambios     /research improve {f["uuid"]} --motivo "..."'
             )
-            print(
-                f"     armar el documento  /research present {f['uuid']} --formato docx"
-            )
+            print(f"     marcar p/documento  /research present {f['uuid']}")
         elif tipo == "atascada":
             cuando = _horas_en_waiting(f.get("waiting_desde") or "")
             print(
