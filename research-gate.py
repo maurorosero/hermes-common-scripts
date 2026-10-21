@@ -225,12 +225,57 @@ def _mover_a_ready(carpeta: Path) -> Path:
     return destino
 
 
-def verbo_approve(uuid: str, nota: str | None) -> int:
+def _hay_entregable(carpeta: Path) -> str:
+    """El archivo que se firma. Sin esto no hay nada que aprobar."""
+    for extension in ("*.md", "*.docx", "*.pdf", "*.pptx"):
+        if (carpeta / "deliverables").exists():
+            encontrados = sorted((carpeta / "deliverables").glob(extension))
+            if encontrados:
+                return encontrados[0].name
+    return ""
+
+
+def _va_a_documento(datos: dict, destino: str | None) -> bool:
+    """Si la investigacion no esta completa hasta que exista un documento.
+
+    Sale del pedido (`destino_post_investigacion: documento`) o de `--a documento`. El resto de
+    los destinos describen que se hace con el resultado, no que falte un entregable: esos
+    terminan en `ready`.
+    """
+    elegido = destino or datos.get("destino_post_investigacion") or "ready"
+    valor = str(elegido).strip().casefold()
+    if valor in ("documento", "document", "presentacion", "presentación"):
+        return True
+    if valor in (
+        "ready",
+        "done",
+        "archivar_wiki",
+        "insumo_propuesta",
+        "entregar_tercero",
+        "informar_decision",
+        "dejar_en_entregas",
+    ):
+        return False
+    raise SystemExit(f"destino '{elegido}' no existe. --a acepta: ready | documento")
+
+
+def verbo_approve(uuid: str, nota: str | None, destino: str | None = None) -> int:
+    """Cierra el gate humano: la investigacion termina en `ready`, o queda en `waiting`.
+
+    `ready` es donde muere el research. `waiting` es la decision humana de que falta un
+    documento para darla por completa; la escribe este verbo, no un barrido.
+    """
     carpeta = _carpeta(uuid)
     datos, cuerpo = _leer(carpeta / "request.md")
-    if datos.get("estado") == "ready":
-        print(f"{uuid}: ya estaba aprobada (ready)")
+    if datos.get("estado") in ("ready", "waiting"):
+        print(f"{uuid}: ya estaba aprobada ({datos.get('estado')})")
         return 0
+    entregable = _hay_entregable(carpeta)
+    if not entregable:
+        raise SystemExit(
+            f"{uuid}: no hay nada que firmar — no hay entregable en deliverables/.\n"
+            f"  aprobar sin informe es firmar el aire."
+        )
     _, plan = _plan(carpeta)
     card = plan.get("gate")
     if card:
@@ -245,12 +290,26 @@ def verbo_approve(uuid: str, nota: str | None) -> int:
         print("APROBADA CON AVISOS — los assets no estan completos:")
         for p in incompletos:
             print(f"  - {p}")
-    datos["estado"] = "ready"
+    a_documento = _va_a_documento(datos, destino)
+    datos["estado"] = "waiting" if a_documento else "ready"
+    if a_documento:
+        datos["waiting_desde"] = dt.datetime.now().isoformat(timespec="seconds")
     _escribir(carpeta / "request.md", datos, cuerpo)
-    _gate(carpeta, datos, "aprobado", card=card, nota=nota)
-    destino = _mover_a_ready(carpeta)
-    print(f"{uuid}: aprobada -> ready (card de gate {card or 'inexistente'})")
-    print(f"  termina en: {destino}")
+    _gate(
+        carpeta,
+        datos,
+        "aprobado_a_documento" if a_documento else "aprobado",
+        card=card,
+        nota=nota,
+    )
+    ruta = _mover_a_ready(carpeta)
+    print(
+        f"{uuid}: aprobada -> {datos['estado']} (card de gate {card or 'inexistente'})"
+    )
+    print(f"  firmado: {entregable}")
+    if a_documento:
+        print("  falta el documento para darla por completa.")
+    print(f"  termina en: {ruta}")
     return 0
 
 
@@ -337,7 +396,9 @@ def verbo_present(uuid: str, formato: str | None, audiencia: str | None) -> int:
     datos, cuerpo = _leer(carpeta / "request.md")
     # Solo lo aprobado se manda a documento: `ready` es donde termina una investigacion que
     # paso el gate humano. Si todavia esta en curso no hay nada que presentar.
-    if datos.get("estado") != "ready":
+    # `waiting` tambien vale: ya paso el gate y espera documento, asi que un segundo pedido
+    # (otro formato, otro publico) es legitimo. Lo que no vale es una investigacion en curso.
+    if datos.get("estado") not in ("ready", "waiting"):
         raise SystemExit(
             f"{uuid}: primero hay que darla por buena — está en '{datos.get('estado')}'.\n"
             f"  aprobarla: /research approve {uuid}"
@@ -379,9 +440,10 @@ def verbo_present(uuid: str, formato: str | None, audiencia: str | None) -> int:
         texto, encoding="utf-8"
     )
 
-    # El documento es opcional: la investigacion sigue terminada en `ready` y el pedido queda
-    # anotado en el gate. Bajar el estado a `waiting` deshacia la aprobacion.
-    datos["estado"] = "ready"
+    # `waiting` lo escribe una persona: significa que la investigacion no esta completa hasta
+    # que exista el documento. No es un barrido el que lo decide.
+    datos["estado"] = "waiting"
+    datos["waiting_desde"] = dt.datetime.now().isoformat(timespec="seconds")
     _escribir(carpeta / "request.md", datos, cuerpo)
     _gate(
         carpeta,
@@ -391,7 +453,7 @@ def verbo_present(uuid: str, formato: str | None, audiencia: str | None) -> int:
         audiencia=audiencia,
         brief=str(destino_cola),
     )
-    print(f"{uuid}: pedido de documento anotado (la investigacion sigue aprobada)")
+    print(f"{uuid}: marcada para documento -> waiting")
     print(f"  brief: {destino_cola}")
     print(f"  salida esperada: {salida}")
     return 0
@@ -477,6 +539,7 @@ def _ficha(carpeta: Path) -> dict:
         "uuid": datos.get("uuid") or carpeta.name,
         "tema": (datos.get("tema") or "(sin tema)").strip(),
         "estado": datos.get("estado") or "?",
+        "waiting_desde": datos.get("waiting_desde") or "",
         "listo_por": bool(datos.get("listo_por")),
         "salida": (datos.get("salida_expectada") or {}).get("formato") or "",
         "gate": plan.get("gate") or "",
@@ -548,6 +611,24 @@ def _espera_presenter(carpeta: Path, uuid: str) -> str:
 def _linea(f: dict, extra: str = "") -> str:
     tema = f["tema"] if len(f["tema"]) <= 42 else f["tema"][:41] + "…"
     return f"{f['uuid']}  {tema}" + (f"\n              {extra}" if extra else "")
+
+
+def _horas_en_waiting(desde: str) -> str:
+    """Cuanto lleva esperando el documento, en palabras. Vacio si no hay fecha."""
+    if not desde:
+        return ""
+    try:
+        t = dt.datetime.fromisoformat(str(desde))
+    except ValueError:
+        return ""
+    if t.tzinfo:
+        t = t.astimezone().replace(tzinfo=None)
+    minutos = int((dt.datetime.now() - t).total_seconds() // 60)
+    if minutos < 60:
+        return f"hace {minutos} min"
+    if minutos < 60 * 48:
+        return f"hace {minutos // 60} h"
+    return f"hace {minutos // (60 * 24)} días"
 
 
 def _documento(carpeta: Path, uuid: str) -> str:
@@ -677,11 +758,19 @@ def verbo_panel(_uuid: str | None = None) -> int:
                 f"     armar el documento  /research present {f['uuid']} --formato docx"
             )
         elif tipo == "atascada":
-            print("   Está aprobada: la investigación terminó.")
+            cuando = _horas_en_waiting(f.get("waiting_desde") or "")
+            print(
+                "   Aprobada y marcada para documento"
+                + (f" {cuando}" if cuando else " (sin fecha de entrada)")
+                + ": falta el documento para darla por completa."
+            )
             print(f"   {_documento(f['carpeta'], f['uuid'])}")
         elif tipo == "aprobada":
-            print("   Terminada y aprobada.")
-            print(f"   {_documento(f['carpeta'], f['uuid'])}")
+            print("   Terminada y aprobada: acá muere el research.")
+            print(
+                f"   si querés un documento, es un pedido aparte: "
+                f"/research present {f['uuid']} --formato docx"
+            )
         elif tipo == "trabaja":
             print("   Está trabajando sola ahora mismo. No tenés que hacer nada.")
         elif tipo == "cortada":
@@ -992,7 +1081,8 @@ def main(argv: list[str]) -> int:
     uuid = argv[2]
     if verbo == "approve":
         nota = _texto_libre(argv, "--nota", minimo=3) if "--nota" in argv else None
-        return verbo_approve(uuid, nota)
+        a = argv[argv.index("--a") + 1] if "--a" in argv else None
+        return verbo_approve(uuid, nota, a)
     if verbo == "improve":
         if "--motivo" not in argv:
             raise SystemExit("improve necesita --motivo")
