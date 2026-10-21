@@ -1,3 +1,17 @@
+## El proceso de research ya no vive acá
+
+El contrato (`research-esquema.yaml`), el validador, el watcher y el gate son **del skill
+`research-pipeline`** (`~/developers/ai/skills/research/research-pipeline/scripts/`): los scripts y
+su cron son parte del skill.
+
+Acá quedan sólo dos cosas:
+
+- `research-watcher.py` — **lanzador** de una docena de líneas. `hermes cron` exige que el script
+  esté bajo `~/.hermes/scripts/`, así que no puede entrar a un skill; esto sólo ejecuta el del
+  skill. Si el skill no está, falla con un mensaje en vez de callarse.
+- Las **herramientas genéricas**, que no son del proceso y sirven a cualquier tarea:
+  `render-page.js`, `verify-citations.py`, `render-asset.py`.
+
 # hermes-common-scripts
 
 Utileria transversal para agentes Hermes: scripts que **no pertenecen a un skill ni a un
