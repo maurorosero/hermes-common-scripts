@@ -88,16 +88,18 @@ campos:
   estado:
     tipo: enum
     obligatorio: true
-    dominio: [requested, processing, ready, waiting]
+    dominio: [requested, processing, waiting, done]
     correccion: requested
     descripcion: >
-      Etapa del ciclo. La puerta lo fija en requested al entrar. El recorrido es
-      requested -> processing -> ready. `ready` es el final de una investigacion completa y
-      exitosa despues del gate humano: ahi muere el proceso. La carpeta `ready/` es un area de
-      transito, no un archivo: el flujo la deja ahi y el humano decide si la deja o la mueve
-      donde le convenga, porque la investigacion ya cerro y no depende de esa ruta. `waiting` es una decision
-      humana —la investigacion no se da por terminada hasta que exista un documento— y la
-      escribe `approve` o `present`, nunca un barrido.
+      Etapa del ciclo. La puerta lo fija en requested al entrar, el dispatcher en processing.
+      Aprobada por el humano, la investigacion termina en `done` y su carpeta va a `ready/`.
+      `waiting` es la misma aprobacion pero con un documento pendiente: la investigacion no se
+      da por terminada hasta que ese documento exista. La escribe el humano (`approve` o
+      `present`), nunca un barrido.
+
+      `ready/` es la carpeta, no un estado: es el area de transito donde el flujo deja lo
+      aprobado. El humano decide despues si la deja ahi o la mueve donde le convenga, porque la
+      investigacion ya cerro y no depende de esa ruta.
 
   tipo:
     tipo: enum

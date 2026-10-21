@@ -271,7 +271,7 @@ def _va_a_documento(datos: dict, destino: str | None) -> bool:
     los destinos describen que se hace con el resultado, no que falte un entregable: esos
     terminan en `ready`.
     """
-    elegido = destino or datos.get("destino_post_investigacion") or "ready"
+    elegido = destino or datos.get("destino_post_investigacion") or "done"
     valor = str(elegido).strip().casefold()
     if valor in ("documento", "document", "presentacion", "presentación"):
         return True
@@ -297,7 +297,7 @@ def verbo_approve(uuid: str, nota: str | None, destino: str | None = None) -> in
     """
     carpeta = _carpeta(uuid)
     datos, cuerpo = _leer(carpeta / "request.md")
-    if datos.get("estado") in ("ready", "waiting"):
+    if datos.get("estado") in ("done", "waiting"):
         print(f"{uuid}: ya estaba aprobada ({datos.get('estado')})")
         return 0
     entregable = _hay_entregable(carpeta)
@@ -321,7 +321,9 @@ def verbo_approve(uuid: str, nota: str | None, destino: str | None = None) -> in
         for p in incompletos:
             print(f"  - {p}")
     a_documento = _va_a_documento(datos, destino)
-    datos["estado"] = "waiting" if a_documento else "ready"
+    # La carpeta es `ready/` en los dos casos: es el area de transito donde el flujo la deja.
+    # El estado distingue si la investigacion esta cerrada (`done`) o si falta el documento.
+    datos["estado"] = "waiting" if a_documento else "done"
     if a_documento:
         datos["waiting_desde"] = dt.datetime.now().isoformat(timespec="seconds")
     _escribir(carpeta / "request.md", datos, cuerpo)
@@ -428,7 +430,7 @@ def verbo_present(uuid: str, formato: str | None, audiencia: str | None) -> int:
     # paso el gate humano. Si todavia esta en curso no hay nada que presentar.
     # `waiting` tambien vale: ya paso el gate y espera documento, asi que un segundo pedido
     # (otro formato, otro publico) es legitimo. Lo que no vale es una investigacion en curso.
-    if datos.get("estado") not in ("ready", "waiting"):
+    if datos.get("estado") not in ("done", "waiting"):
         raise SystemExit(
             f"{uuid}: primero hay que darla por buena — está en '{datos.get('estado')}'.\n"
             f"  aprobarla: /research approve {uuid}"
@@ -690,7 +692,11 @@ def _documento(carpeta: Path, uuid: str) -> str:
             "Le pediste el documento pero el pedido se perdió: si todavía lo querés, "
             f"/research present {uuid}"
         )
-    return f"Si querés el documento armado: /research present {uuid}"
+    return (
+        "el pedido de documento está anotado; falta que exista el proceso de documents."
+        if (carpeta / "deliverables").exists()
+        else f"todavía no hay pedido de documento: /research present {uuid}"
+    )
 
 
 def verbo_pending(_uuid: str | None = None) -> int:
@@ -755,9 +761,16 @@ def verbo_panel(_uuid: str | None = None) -> int:
         for carpeta in sorted(p for p in READY.iterdir() if p.is_dir()):
             if (carpeta / "request.md").exists():
                 try:
-                    filas.append(("aprobada", _ficha(carpeta)))
+                    ficha = _ficha(carpeta)
                 except SystemExit:
                     continue
+                # En ready/ viven las dos: la cerrada (`done`) y la que espera documento.
+                filas.append(
+                    (
+                        "atascada" if ficha.get("estado") == "waiting" else "aprobada",
+                        ficha,
+                    )
+                )
     if REQUESTED.exists():
         for archivo in sorted(REQUESTED.glob("*.md")):
             if archivo.name in ("PLANTILLA.md",) or archivo.name.startswith("_"):
@@ -882,7 +895,7 @@ def verbo_relaunch(uuid: str, barato: bool = False) -> int:
     carpeta = _carpeta(uuid)
     datos, cuerpo = _leer(carpeta / "request.md")
 
-    if datos.get("estado") in ("ready", "waiting"):
+    if datos.get("estado") in ("done", "waiting"):
         print(
             f"{uuid}: no la relanzo — esta en '{datos.get('estado')}', ya tiene entregable."
         )
