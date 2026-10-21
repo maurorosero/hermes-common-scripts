@@ -74,3 +74,23 @@ igual viaja en el historial.
 Los archivos cifrados con SOPS son la unica via legitima de poner un secreto en un repo, y no
 estan en la allowlist a proposito: el que esta bien cifrado pasa solo, y el que quedo sin
 cifrar tiene que bloquear.
+
+## El brief es el estado compartido con documents
+
+`present` escribe `~/Research/documentos/requested/<uuid>.yaml` con `estado: pedido`. Ese archivo
+es el unico punto que los dos procesos ven, y cada uno escribe su parte:
+
+| campo | quien lo escribe | cuando |
+|---|---|---|
+| `estado: pedido` | research (`present`) | al marcar que hace falta documento |
+| `estado: en_proceso` | documents | cuando lo toma |
+| `estado: entregado` + `documento: <ruta>` | documents | al terminar |
+| `estado: fallido` + `motivo` | documents | si no pudo |
+| `estado: cancelado` | research (`close`) | si el humano cierra sin documento |
+
+El research lee `estado` para cerrar la investigacion en `done` cuando el documento existe, y
+`close` marca `cancelado` para que del otro lado no quede un pedido vivo. Nadie consulta la base
+del otro: el lazo es el archivo.
+
+**Falta construir** el barrido que lee `entregado` y cierra la investigacion: hoy nada escribe ese
+valor porque documents no existe, asi que la salida real es `close`.

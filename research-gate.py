@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 """El gate humano del flujo de research. Los verbos los firma Mauro, no un agente.
 
-Tres decisiones, ninguna automatica:
+Contrato con documents (para cuando ese proceso exista): el brief que escribe `present` en
+`~/Research/documentos/requested/<uuid>.yaml` es el estado que **los dos** ven. Lo escribe el
+research en `pedido`; documents lo pasa a `en_proceso` y, al terminar, a `entregado` (dejando en
+`documento:` la ruta del archivo) o a `fallido` (con `motivo`). El research lee ese campo:
+`entregado` -> la investigacion se cierra en `done`; `fallido` -> sigue en `waiting` y el panel lo
+dice. Nadie consulta la base del otro.
+
+Las decisiones las firma un humano, ninguna es automatica:
 
     approve  <uuid> [--a documento]     firma el informe: termina en `ready`, o en `waiting`
                                         si el resultado tiene que pasar por el presenter
     improve  <uuid> --motivo "..."      no aprobado: vuelve al redactor con el motivo
     present  <uuid>                     marca que hace falta un documento -> `waiting`
+    close    <uuid> [--motivo "..."]    cierra a mano la que esperaba documento -> `done`
     show     <uuid>                    el estado del gate, sin tocar nada
     assets   <uuid>                    el manifiesto contra el disco (--check)
     relaunch <uuid> [--barato]         la vuelve a encolar desde cero y archiva la muerta
@@ -423,6 +431,69 @@ def verbo_improve(uuid: str, motivo: str) -> int:
     return 0
 
 
+def _cancelar_brief(carpeta: Path, motivo: str | None) -> None:
+    """Marca el pedido de documento como cancelado, si existe.
+
+    El brief es el estado que los dos procesos ven: si la investigacion se cierra a mano, del
+    lado de documents el pedido deja de tener sentido.
+    """
+    import yaml
+
+    gate = carpeta / "validation" / "gate.json"
+    if not gate.exists():
+        return
+    try:
+        registrado = json.loads(gate.read_text()).get("brief")
+    except (OSError, json.JSONDecodeError):
+        return
+    if not registrado or not Path(registrado).exists():
+        return
+    ruta = Path(registrado)
+    try:
+        brief = yaml.safe_load(ruta.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return
+    brief["estado"] = "cancelado"
+    brief["motivo"] = motivo or "la investigación se cerró sin documento"
+    ruta.write_text(
+        yaml.safe_dump(brief, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
+    print(f"  pedido de documento cancelado: {ruta}")
+
+
+def verbo_close(uuid: str, motivo: str | None) -> int:
+    """Cierra a mano una investigacion que esperaba documento.
+
+    Con documents todavia sin existir, nada va a escribir `entregado` en el brief, asi que
+    `waiting` no tendria salida. Es la salida manual: el humano decide que la investigacion
+    termina aunque no haya documento. Cerrar no es aprobar el documento: research solo registra
+    que el tramite se dio por terminado.
+    """
+    carpeta = _carpeta(uuid)
+    datos, cuerpo = _leer(carpeta / "request.md")
+    estado = str(datos.get("estado") or "")
+    if estado == "done":
+        raise SystemExit(f"{datos.get('uuid')}: ya está cerrada.")
+    if estado != "waiting":
+        raise SystemExit(
+            f"{datos.get('uuid')}: está en '{estado}'. Sólo se cierra una que espera documento "
+            f"(`waiting`); para terminarla hay que aprobarla: /research approve "
+            f"{datos.get('uuid')}"
+        )
+    datos["estado"] = "done"
+    datos["cerrada_por"] = "humano"
+    datos["cerrada_el"] = dt.datetime.now().isoformat(timespec="seconds")
+    if motivo:
+        datos["motivo_cierre"] = motivo
+    _escribir(carpeta / "request.md", datos, cuerpo)
+    _cancelar_brief(carpeta, motivo)
+    print(f"{datos.get('uuid')}: cerrada -> done")
+    if motivo:
+        print(f"  motivo: {motivo}")
+    print(f"  carpeta: {carpeta}  (ready/ es área de tránsito: podés moverla)")
+    return 0
+
+
 def verbo_present(uuid: str, formato: str | None, audiencia: str | None) -> int:
     carpeta = _carpeta(uuid)
     datos, cuerpo = _leer(carpeta / "request.md")
@@ -677,7 +748,7 @@ def _horas_en_waiting(desde: str) -> str:
 
 
 def _documento(carpeta: Path, uuid: str) -> str:
-    """El documento es opcional: se informa en que quedo, no se reclama."""
+    """En que quedo el documento. El estado se lee del brief, que es lo que los dos ven."""
     gate = carpeta / "validation" / "gate.json"
     registrado = ""
     if gate.exists():
@@ -685,18 +756,31 @@ def _documento(carpeta: Path, uuid: str) -> str:
             registrado = str(json.loads(gate.read_text()).get("brief") or "")
         except (OSError, json.JSONDecodeError):
             registrado = ""
-    if registrado and Path(registrado).exists():
-        return "Le pediste el documento y está en la cola esperando que lo armen."
-    if registrado:
+    if not registrado:
+        return f"todavía no hay pedido de documento: /research present {uuid}"
+    ruta = Path(registrado)
+    if not ruta.exists():
         return (
             "Le pediste el documento pero el pedido se perdió: si todavía lo querés, "
             f"/research present {uuid}"
         )
-    return (
-        "el pedido de documento está anotado; falta que exista el proceso de documents."
-        if (carpeta / "deliverables").exists()
-        else f"todavía no hay pedido de documento: /research present {uuid}"
-    )
+    import yaml
+
+    try:
+        brief = yaml.safe_load(ruta.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        brief = {}
+    estado = str(brief.get("estado") or "pedido")
+    doc = brief.get("documento")
+    if estado == "entregado":
+        return f"El documento está hecho: {doc or 'en deliverables/'}"
+    if estado == "en_proceso":
+        return "El presenter lo está armando."
+    if estado == "fallido":
+        return f"El presenter falló: {brief.get('motivo') or 'sin motivo anotado'}"
+    if estado == "cancelado":
+        return f"El pedido de documento se canceló: /research present {uuid}"
+    return "Pedido de documento anotado, esperando que documents lo tome."
 
 
 def verbo_pending(_uuid: str | None = None) -> int:
@@ -1150,6 +1234,11 @@ def main(argv: list[str]) -> int:
             argv[argv.index("--audiencia") + 1] if "--audiencia" in argv else None
         )
         return verbo_present(uuid, formato, audiencia)
+    if verbo == "close":
+        motivo = (
+            _texto_libre(argv, "--motivo", minimo=10) if "--motivo" in argv else None
+        )
+        return verbo_close(uuid, motivo)
     if verbo == "show":
         return verbo_show(uuid)
     if verbo == "assets":
