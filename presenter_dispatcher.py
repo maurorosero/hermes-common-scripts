@@ -2,7 +2,7 @@
 """Lanzador del Oficio 2 del presenter. Lo unico que vive aca es la obligacion del cron.
 
 `hermes cron` exige que el script este bajo ~/.hermes/scripts/, asi que no puede entrar al
-skill. El codigo del proceso vive en el skill `presenter` (`scripts/presenter_dispatcher.py`);
+skill. El codigo del proceso vive en el skill `presenter-flow` (`scripts/presenter_dispatcher.py`);
 esto solo lo ejecuta.
 
 Sin logica: la puerta, la salud y las enterradas —y callarse cuando no hay nada que contar,
@@ -24,13 +24,13 @@ REAL = (
     / "ai"
     / "skills"
     / "research"
-    / "presenter"
+    / "presenter-flow"
     / "scripts"
     / "presenter_dispatcher.py"
 )
 
 if not REAL.is_file():
-    raise SystemExit(f"no encuentro el oficio del skill presenter: {REAL}")
+    raise SystemExit(f"no encuentro el oficio del skill presenter-flow: {REAL}")
 
 sys.argv[0] = str(REAL)
 runpy.run_path(str(REAL), run_name="__main__")

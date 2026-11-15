@@ -40,6 +40,7 @@ def _external_dirs(cfg_path: Path) -> list[str]:
         return []
     salida: list[str] = []
     en_skills = en_lista = False
+    sangria_lista = -1
     for cruda in lineas:
         texto = cruda.strip()
         if not texto or texto.startswith("#"):
@@ -50,11 +51,18 @@ def _external_dirs(cfg_path: Path) -> list[str]:
             continue
         if not en_skills:
             continue
+        # Los items de la lista pueden colgar con MAS sangria que la clave o ALINEADOS
+        # con ella, que es el estilo de config.yaml. Aceptar solo la primera forma deja
+        # la lista vacia y el puente no encuentra casos.py. Medido el 2026-10-22.
+        if en_lista and sangria >= sangria_lista and texto.startswith("- "):
+            salida.append(texto[2:].strip().strip("\"'"))
+            continue
+        if en_lista and sangria < sangria_lista:
+            en_lista = False
         if sangria == 2:
             en_lista = texto == "external_dirs:"
+            sangria_lista = sangria
             continue
-        if en_lista and texto.startswith("- "):
-            salida.append(texto[2:].strip().strip("\"'"))
     return salida
 
 

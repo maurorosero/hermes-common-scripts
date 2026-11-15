@@ -63,7 +63,7 @@ def _external_dirs(cfg_path: Path) -> list[str]:
             continue
         if not en_skills:
             continue
-        if sangria == 2:
+        if sangria == 2 and not texto.startswith("- "):
             en_lista = texto == "external_dirs:"
             continue
         if en_lista and texto.startswith("- "):
