@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Lanzador del Oficio 2 del presenter. Lo unico que vive aca es la obligacion del cron.
 
 `hermes cron` exige que el script este bajo ~/.hermes/scripts/, asi que no puede entrar al
