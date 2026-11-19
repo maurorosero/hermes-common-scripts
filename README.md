@@ -75,6 +75,20 @@ y hay que reinstalarlo en cada clon.
 | `render-asset.py` | Produce los assets de una investigación desde `assets/manifiesto.yaml`. La spec es dato y el render es código: una gráfica o un diagrama no consume tokens ni puede inventar una cifra, porque los números salen de un claim. `--check` valida que cada asset esté atado a un claim existente y referenciado en el informe. Lo que sólo adorna (ilustración) no se produce acá: lo pide el manifiesto y lo hace el presenter. |
 | `research-gate.py` | El gate humano del flujo. `approve <uuid>` cierra la card de gate y deja el estado en `ready` (carpeta en `ready/`, que es área de tránsito: el humano la deja o la mueve, la investigación ya cerró); `improve <uuid> --motivo "..."` devuelve el trabajo en una card nueva con el motivo adentro; `present <uuid>` escribe el brief del documento en la cola del presenter y deja el estado en `waiting`; `show <uuid>` informa sin tocar nada. Los tres verbos exigen que el estado venga del gate: nada se aprueba por fuera. |
 
+## Secretos
+
+`infisical_client.py` — pide un secreto a la bóveda cuando el entorno no lo trae. Resuelve la
+**ubicación en bloque**: entorno → config del perfil → scope `/etc/hermes`, y si ninguno la
+trae, falla diciendo por qué en vez de buscar en `/`. Hace el login Universal Auth y no guarda
+nada en disco.
+
+Es la puerta para lo que corre **fuera** del gateway (ssh, cron del sistema, a mano). Dentro del
+gateway no hace falta: el core ya inyectó la carpeta entera al arrancar y los hijos la heredan.
+
+```bash
+python3 infisical_client.py NEXTCLOUD_HOST TELEGRAM_BOT_TOKEN   # diagnóstico, sin valores
+```
+
 ## Gate de secretos
 
 El repo lleva un gate en dos puntos:
