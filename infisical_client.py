@@ -55,10 +55,12 @@ def _hermes_home() -> Path:
 
 
 def _home_real() -> Path:
-    """El home de Hermes, aunque el proceso corra con HERMES_HOME de un perfil."""
-    return Path(
-        os.environ.get("HERMES_REAL_HOME") or (Path.home() / ".hermes")
-    ).expanduser()
+    """El home de Hermes, aunque el proceso corra con HERMES_HOME de un perfil.
+
+    Ojo: HERMES_REAL_HOME es el home del USUARIO (/home/andrea), no el de Hermes.
+    """
+    home = _hermes_home()
+    return home.parent.parent if home.parent.name == "profiles" else home
 
 
 def _leer_dotenv(ruta: Path) -> dict:
