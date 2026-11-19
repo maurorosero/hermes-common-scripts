@@ -38,7 +38,6 @@ CONFIG_LOCAL = Path(__file__).with_name(f"{NOMBRE}.local.json")
 
 # El transporte CardDAV no se duplica: su dueño es el skill nextcloud-contacts.
 TRANSPORTE = "productivity/nextcloud-contacts/scripts/dav.py"
-HELPER_INFISICAL = "harness/hermes-infisical-secrets/scripts/infisical_auth.py"
 
 DEFECTOS = {
     "libreta": None,
@@ -141,18 +140,15 @@ def resolver(relativo: str) -> Path:
 
 
 def _secreto(nombre: str) -> str | None:
-    """Entorno primero; si no esta, se resuelve por Infisical. Nunca se imprime."""
+    """Entorno primero; si no esta, se le pide al cliente comun. Nunca se imprime."""
     valor = (os.environ.get(nombre) or "").strip()
     if valor:
         return valor
-    ruta = resolver(HELPER_INFISICAL)
-    sys.path.insert(0, str(ruta.parent))
     try:
-        import infisical_auth  # type: ignore
-
-        return (infisical_auth.get_secret(nombre) or "").strip() or None
-    except Exception:  # noqa: BLE001 — sin credencial no hay lectura: se falla arriba
+        from infisical_client import get_secret  # al lado de este archivo
+    except ImportError:
         return None
+    return (get_secret(nombre) or "").strip() or None
 
 
 # ── Lectura de la libreta (CardDAV) ──────────────────────────────────────────
