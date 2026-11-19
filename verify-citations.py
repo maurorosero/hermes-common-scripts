@@ -47,7 +47,7 @@ def raices_de_cache(explicita: Path | None = None) -> list[Path]:
     """Todas las cachés de extracción que pueden tener la evidencia.
 
     Cada perfil es una isla: un worker escribe en la caché de SU home
-    (``profiles/<perfil>/cache/web``), no en la del home de Andrea. Mirar sólo la del
+    (``profiles/<perfil>/cache/web``), no en la del home activo. Mirar sólo la del
     home hace que toda ficha salga como "sin fuente" aunque la página se haya bajado.
     """
     import os

@@ -105,7 +105,7 @@ cifrar tiene que bloquear.
 
 ## El brief es el estado compartido con documents
 
-`present` escribe `~/Research/documentos/requested/<uuid>.yaml` con `estado: pedido`. Ese archivo
+`present` escribe `<research>/documentos/requested/<uuid>.yaml` con `estado: pedido`. Ese archivo
 es el unico punto que los dos procesos ven, y cada uno escribe su parte:
 
 | campo | quien lo escribe | cuando |
@@ -122,3 +122,11 @@ del otro: el lazo es el archivo.
 
 **Falta construir** el barrido que lee `entregado` y cierra la investigacion: hoy nada escribe ese
 valor porque documents no existe, asi que la salida real es `close`.
+
+## Licencia
+
+GPL-3.0-or-later. Ver `LICENSE`.
+
+El motivo de copyleft: estos scripts existen para que un agente haga trabajo real sobre
+infraestructura ajena. Quien los mejore para su propio caso tiene que poder devolver esa
+mejora, no quedársela.

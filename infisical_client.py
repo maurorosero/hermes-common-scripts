@@ -57,7 +57,8 @@ def _hermes_home() -> Path:
 def _home_real() -> Path:
     """El home de Hermes, aunque el proceso corra con HERMES_HOME de un perfil.
 
-    Ojo: HERMES_REAL_HOME es el home del USUARIO (/home/andrea), no el de Hermes.
+    Ojo: HERMES_REAL_HOME es el home del USUARIO (p. ej. /home/<usuario>), no el de
+    Hermes.
     """
     home = _hermes_home()
     return home.parent.parent if home.parent.name == "profiles" else home

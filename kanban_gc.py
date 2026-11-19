@@ -3,7 +3,7 @@
 
 `hermes kanban gc` existe en el core —borra `task_events` de tareas terminales y los logs de
 workers, con 30 dias de retencion por defecto— y nadie lo invocaba: al 6-nov los tres tableros
-sumaban 8.849 eventos (presenter 3.676, research 4.340, andrea-tasks 833) creciendo sin techo.
+sumaban miles de eventos repartidos entre varios tableros, y crecían sin techo.
 
 Corre por tablero porque el verbo es por tablero (`--board` no tiene un "todos"). Se calla
 cuando no hay nada que recolectar: un cron diario que habla para decir «nada» es ruido, y este
