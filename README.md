@@ -123,6 +123,16 @@ del otro: el lazo es el archivo.
 **Falta construir** el barrido que lee `entregado` y cierra la investigacion: hoy nada escribe ese
 valor porque documents no existe, asi que la salida real es `close`.
 
+## Créditos
+
+- **Mauro Rosero Pérez** (`maurorosero`) — autor y mantenedor.
+- **Andrea**, agente de ROSERO ONE (Hermes Agent) — migración del cliente de secretos,
+  documentación y verificación.
+
+## Cambios
+
+Ver `CHANGELOG.md`.
+
 ## Licencia
 
 GPL-3.0-or-later. Ver `LICENSE`.
