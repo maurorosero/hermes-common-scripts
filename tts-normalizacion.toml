@@ -1,0 +1,76 @@
+# Diccionario de normalización para la voz de Hermes.
+#
+# Se edita sin tocar código: cada regla reemplaza un patrón antes de sintetizar.
+# Los patrones son expresiones regulares y no distinguen mayúsculas.
+# Entre comillas simples el texto es literal: '\b' es límite de palabra, no un backspace.
+#
+# Lo que se agrega seguido: siglas que la voz deletrea mal, anglicismos que suenan
+# raros en español y números que conviene escribir con palabras.
+
+voz = "es-ES-ElviraNeural"
+
+[[reglas]]
+de = '\bAI\b'
+a = "inteligencia artificial"
+
+[[reglas]]
+de = '\bU\.S\.A\.'
+a = "Estados Unidos"
+
+[[reglas]]
+de = '\bUSA\b'
+a = "Estados Unidos"
+
+[[reglas]]
+de = '\b4K\b'
+a = "cuatro ka"
+
+[[reglas]]
+de = '\b8K\b'
+a = "ocho ka"
+
+[[reglas]]
+de = '\bCEO\b'
+a = "director ejecutivo"
+
+[[reglas]]
+de = '\bCTO\b'
+a = "director de tecnología"
+
+[[reglas]]
+de = '\bblockchain\b'
+a = "cadena de bloques"
+
+[[reglas]]
+de = '\bbackup\b'
+a = "respaldo"
+
+[[reglas]]
+de = '\bWiFi\b'
+a = "wifi"
+
+[[reglas]]
+de = '\bOK\b'
+a = "de acuerdo"
+
+[[reglas]]
+de = '\bFYI\b'
+a = "para tu información"
+
+# Siglas y marcas que se dejan tal cual, a propósito: Elvira las pronuncia bien o
+# su lectura en inglés es la correcta. Esta lista no cambia el comportamiento;
+# documenta la decisión para no volver a discutirla.
+[intactas]
+palabras = [
+    "PDF",
+    "FBI",
+    "NASA",
+    "OpenAI",
+    "WhatsApp",
+    "TikTok",
+    "Instagram",
+    "Telegram",
+    "Cloudflare",
+    "Proxmox",
+    "Trump",
+]
