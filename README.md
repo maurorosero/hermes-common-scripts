@@ -70,6 +70,17 @@ pre-commit install --hook-type pre-commit --hook-type pre-push
 |---|---|
 | `push-telegram-menu.py` | Actualiza el menú de comandos del bot sin reiniciar el gateway. |
 
+**Voz**
+
+| Script | Qué hace |
+|---|---|
+| `tts-normalizar.py` | Sintetiza texto en voz alta con edge-tts, aplicando antes el diccionario `tts-normalizacion.toml`: siglas y anglicismos que el español no pronuncia bien se reemplazan por su forma hablada. Con `--mostrar` imprime el texto normalizado y no sintetiza. |
+
+El diccionario vive al lado del script y se edita sin tocar código: agregar una palabra es
+agregar una regla. Los patrones son expresiones regulares entre comillas simples (literales), y
+la lista `[intactas]` documenta lo que se deja a propósito —siglas que la voz resuelve bien y
+marcas que se dicen en inglés.
+
 Los **lanzadores** no tienen lógica propia: ejecutan el script que vive en su skill y devuelven su
 salida tal cual. Si el skill no está instalado, fallan con un mensaje en vez de callarse.
 
